@@ -1,0 +1,6 @@
+{
+  "name": "Finance Pro",
+  "description": "Professional Personal Finance & Automated Statement Management System with multi-account tracking, daily Excel-matched statements, petrol & extra expense tracking, monthly & annual summaries, and reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
