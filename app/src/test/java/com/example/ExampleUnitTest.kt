@@ -190,4 +190,54 @@ class ExampleUnitTest {
     val mondayFormatted = com.example.util.DateUtils.formatReadableDateWithDay("2026-11-02")
     assertEquals("Mon, 02 Nov 2026", mondayFormatted)
   }
+
+  @Test
+  fun testUdhaarRepaymentRemainingAndStatusCalculation() {
+    val original = 50000.0
+    var repaid = 15000.0
+    var remaining = (original - repaid).coerceAtLeast(0.0)
+    var status = when {
+      remaining <= 0.0001 -> "SETTLED"
+      repaid > 0.0 -> "PARTIAL"
+      else -> "PENDING"
+    }
+    assertEquals(35000.0, remaining, 0.001)
+    assertEquals("PARTIAL", status)
+
+    // Full repayment
+    repaid += 35000.0
+    remaining = (original - repaid).coerceAtLeast(0.0)
+    status = when {
+      remaining <= 0.0001 -> "SETTLED"
+      repaid > 0.0 -> "PARTIAL"
+      else -> "PENDING"
+    }
+    assertEquals(0.0, remaining, 0.001)
+    assertEquals("SETTLED", status)
+  }
+
+  @Test
+  fun testUdhaarItemTracking() {
+    val itemRecord = com.example.data.model.UdhaarRecordEntity(
+      type = "GIVEN",
+      personName = "Ali Raza",
+      category = "ITEM",
+      itemDescription = "MacBook Pro M2",
+      date = "2026-11-10",
+      time = "10:00 AM",
+      dueDate = "2026-11-20",
+      status = "PENDING",
+      isItemReturned = false
+    )
+    assertEquals("ITEM", itemRecord.category)
+    assertEquals("MacBook Pro M2", itemRecord.itemDescription)
+    assertFalse(itemRecord.isItemReturned)
+    assertEquals(0.0, itemRecord.originalAmount, 0.001)
+    assertEquals(0.0, itemRecord.remainingAmount, 0.001)
+
+    // Mark as returned
+    val returnedRecord = itemRecord.copy(isItemReturned = true, status = "SETTLED")
+    assertTrue(returnedRecord.isItemReturned)
+    assertEquals("SETTLED", returnedRecord.status)
+  }
 }

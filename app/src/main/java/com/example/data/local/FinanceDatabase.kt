@@ -18,9 +18,11 @@ import com.example.data.model.*
         LoanRecordEntity::class,
         MonthlyStatementEntity::class,
         UserProfileEntity::class,
-        CategoryEntity::class
+        CategoryEntity::class,
+        UdhaarRecordEntity::class,
+        UdhaarRepaymentEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class FinanceDatabase : RoomDatabase() {
@@ -52,6 +54,49 @@ abstract class FinanceDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Completely separate ledger: udhaar_records and udhaar_repayments
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS udhaar_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        type TEXT NOT NULL,
+                        personName TEXT NOT NULL,
+                        phoneNumber TEXT NOT NULL DEFAULT '',
+                        category TEXT NOT NULL DEFAULT 'MONEY',
+                        originalAmount REAL NOT NULL DEFAULT 0.0,
+                        remainingAmount REAL NOT NULL DEFAULT 0.0,
+                        itemDescription TEXT NOT NULL DEFAULT '',
+                        date TEXT NOT NULL,
+                        time TEXT NOT NULL,
+                        dayOfWeek TEXT NOT NULL DEFAULT '',
+                        dueDate TEXT NOT NULL DEFAULT '',
+                        note TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'PENDING',
+                        isItemReturned INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL DEFAULT 0,
+                        updatedAt INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS udhaar_repayments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        udhaarId INTEGER NOT NULL,
+                        amount REAL NOT NULL,
+                        date TEXT NOT NULL,
+                        time TEXT NOT NULL,
+                        dayOfWeek TEXT NOT NULL DEFAULT '',
+                        note TEXT NOT NULL DEFAULT '',
+                        createdAt INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY (udhaarId) REFERENCES udhaar_records(id) ON DELETE CASCADE
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_udhaar_repayments_udhaarId ON udhaar_repayments(udhaarId)")
+            }
+        }
+
         /**
          * Thread-safe singleton builder for the Room SQLite database.
          * Persists all transactions, accounts, and financial records safely across app restarts.
@@ -63,7 +108,7 @@ abstract class FinanceDatabase : RoomDatabase() {
                     FinanceDatabase::class.java,
                     "finance_statement_database.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

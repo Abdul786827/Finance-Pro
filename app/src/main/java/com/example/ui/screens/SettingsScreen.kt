@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -23,12 +24,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.UserProfileEntity
+import com.example.ui.theme.EmeraldPrimaryLight
 import com.example.ui.theme.FinanceIncomeBg
 import com.example.ui.theme.FinanceIncomeGreen
 import com.example.ui.viewmodel.FinanceViewModel
@@ -49,9 +52,9 @@ fun SettingsScreen(
         userProfile?.profileImageBase64?.let { ImageUtils.base64ToBitmap(it) }
     }
 
-    var showEditProfileDialog by remember { mutableStateOf(false) }
-    var showChangePasswordDialog by remember { mutableStateOf(false) }
-    var showResetConfirmDialog by remember { mutableStateOf(false) }
+    var showEditProfileDialog by rememberSaveable { mutableStateOf(false) }
+    var showChangePasswordDialog by rememberSaveable { mutableStateOf(false) }
+    var showResetConfirmDialog by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier
@@ -341,23 +344,27 @@ fun SettingsScreen(
         }
     }
 
-    // Edit Profile Dialog with Avatar Photo Picker
+    // Edit Profile Dialog with Avatar Photo & Camera Picker
     if (showEditProfileDialog) {
         userProfile?.let { prof ->
-            var name by remember { mutableStateOf(prof.fullName) }
-            var email by remember { mutableStateOf(prof.email) }
-            var mobile by remember { mutableStateOf(prof.mobile) }
-            var currentImageBase64 by remember { mutableStateOf(prof.profileImageBase64) }
+            var name by rememberSaveable { mutableStateOf(prof.fullName) }
+            var email by rememberSaveable { mutableStateOf(prof.email) }
+            var mobile by rememberSaveable { mutableStateOf(prof.mobile) }
+            var currentImageBase64 by rememberSaveable { mutableStateOf(prof.profileImageBase64) }
+            var pendingCameraUri by rememberSaveable { mutableStateOf<String?>(null) }
+            var showPhotoSourceSheet by rememberSaveable { mutableStateOf(false) }
 
             val previewBitmap = remember(currentImageBase64) {
                 currentImageBase64.takeIf { it.isNotBlank() }?.let { ImageUtils.base64ToBitmap(it) }
             }
 
+            // Photo Gallery Picker (Android Photo Picker - PickVisualMedia)
             val photoPickerLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.PickVisualMedia()
             ) { uri: Uri? ->
+                viewModel.setExternalPickerActive(false)
                 if (uri != null) {
-                    val base64 = ImageUtils.uriToBase64(context, uri)
+                    val base64 = ImageUtils.uriToBase64(context, uri, maxDimension = 512)
                     if (base64 != null) {
                         currentImageBase64 = base64
                     } else {
@@ -366,8 +373,45 @@ fun SettingsScreen(
                 }
             }
 
+            // Camera TakePicture contract with FileProvider URI
+            val cameraLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.TakePicture()
+            ) { success: Boolean ->
+                viewModel.setExternalPickerActive(false)
+                if (success && pendingCameraUri != null) {
+                    val uri = Uri.parse(pendingCameraUri)
+                    val base64 = ImageUtils.uriToBase64(context, uri, maxDimension = 512)
+                    if (base64 != null) {
+                        currentImageBase64 = base64
+                    } else {
+                        Toast.makeText(context, "Could not load captured photo", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            // Camera Permission Request
+            val cameraPermissionLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.RequestPermission()
+            ) { isGranted: Boolean ->
+                if (isGranted) {
+                    val tempUri = ImageUtils.createTempPictureUri(context)
+                    if (tempUri != null) {
+                        pendingCameraUri = tempUri.toString()
+                        viewModel.setExternalPickerActive(true)
+                        cameraLauncher.launch(tempUri)
+                    } else {
+                        Toast.makeText(context, "Could not initialize camera storage", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(context, "Camera permission is required to take a profile photo", Toast.LENGTH_SHORT).show()
+                }
+            }
+
             AlertDialog(
-                onDismissRequest = { showEditProfileDialog = false },
+                onDismissRequest = {
+                    showEditProfileDialog = false
+                    showPhotoSourceSheet = false
+                },
                 title = { Text("Update User Profile") },
                 text = {
                     Column(
@@ -381,9 +425,7 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .size(90.dp)
                                 .clickable {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
+                                    showPhotoSourceSheet = true
                                 }
                                 .testTag("profile_avatar_picker")
                         ) {
@@ -432,33 +474,48 @@ fun SettingsScreen(
                             }
                         }
 
-                        // Photo Action Buttons (Choose / Remove)
+                        // Photo Action Buttons (Choose / Camera / Remove)
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TextButton(
+                            OutlinedButton(
                                 onClick = {
+                                    viewModel.setExternalPickerActive(true)
                                     photoPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
                                 },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(34.dp)
                             ) {
-                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Choose Photo", style = MaterialTheme.typography.labelMedium)
+                                Text("Gallery", fontSize = 12.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Camera", fontSize = 12.sp)
                             }
 
                             if (currentImageBase64.isNotBlank()) {
                                 TextButton(
                                     onClick = { currentImageBase64 = "" },
                                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(34.dp)
                                 ) {
-                                    Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Remove", style = MaterialTheme.typography.labelMedium)
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("Remove", fontSize = 12.sp)
                                 }
                             }
                         }
@@ -506,6 +563,57 @@ fun SettingsScreen(
                     TextButton(onClick = { showEditProfileDialog = false }) { Text("Cancel") }
                 }
             )
+
+            // Choose Source Dialog if Avatar was tapped
+            if (showPhotoSourceSheet) {
+                AlertDialog(
+                    onDismissRequest = { showPhotoSourceSheet = false },
+                    title = { Text("Select Photo Source") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ListItem(
+                                headlineContent = { Text("Choose from Gallery") },
+                                leadingContent = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = EmeraldPrimaryLight) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showPhotoSourceSheet = false
+                                        viewModel.setExternalPickerActive(true)
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    }
+                            )
+                            ListItem(
+                                headlineContent = { Text("Take New Photo with Camera") },
+                                leadingContent = { Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = EmeraldPrimaryLight) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showPhotoSourceSheet = false
+                                        cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                    }
+                            )
+                            if (currentImageBase64.isNotBlank()) {
+                                ListItem(
+                                    headlineContent = { Text("Remove Current Photo", color = MaterialTheme.colorScheme.error) },
+                                    leadingContent = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            currentImageBase64 = ""
+                                            showPhotoSourceSheet = false
+                                        }
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { showPhotoSourceSheet = false }) { Text("Cancel") }
+                    }
+                )
+            }
         }
     }
 

@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 class FinanceViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: FinanceRepository
+    val isExternalPickerActive = MutableStateFlow(false)
 
     init {
         val database = FinanceDatabase.getDatabase(application)
@@ -21,6 +22,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.initializeIfEmpty()
         }
+    }
+
+    fun setExternalPickerActive(active: Boolean) {
+        isExternalPickerActive.value = active
     }
 
     val accounts = repository.accounts.stateIn(
@@ -76,6 +81,38 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         SharingStarted.WhileSubscribed(5000),
         emptyList()
     )
+
+    // Separate Udhaar Ledger states
+    val udhaarRecords = repository.udhaarRecords.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        emptyList()
+    )
+
+    val udhaarRepayments = repository.udhaarRepayments.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        emptyList()
+    )
+
+    // Udhaar Summary Metrics (Completely separate from bank/wallet accounts)
+    val udhaarTotalToReceive = udhaarRecords.map { list ->
+        list.filter { it.type == "GIVEN" && it.category == "MONEY" && it.status != "SETTLED" }
+            .sumOf { it.remainingAmount }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val udhaarTotalToPay = udhaarRecords.map { list ->
+        list.filter { it.type == "TAKEN" && it.category == "MONEY" && it.status != "SETTLED" }
+            .sumOf { it.remainingAmount }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val udhaarNetBalance = combine(udhaarTotalToReceive, udhaarTotalToPay) { recv, pay ->
+        recv - pay
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val udhaarPendingItemsCount = udhaarRecords.map { list ->
+        list.count { it.category == "ITEM" && !it.isItemReturned }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // Filter states
     val searchQuery = MutableStateFlow("")
@@ -358,6 +395,132 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun resetToDemoData() {
         viewModelScope.launch {
             repository.resetAllDataToZero()
+        }
+    }
+
+    // --- UDHAAR VIEWMODEL ACTIONS ---
+    fun addUdhaar(
+        type: String,
+        personName: String,
+        phoneNumber: String = "",
+        category: String = "MONEY",
+        amount: Double = 0.0,
+        itemDescription: String = "",
+        date: String = DateUtils.getCurrentDate(),
+        time: String = DateUtils.getCurrentTime(),
+        dueDate: String = "",
+        note: String = "",
+        onComplete: (Long) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val id = repository.addUdhaarRecord(
+                type = type,
+                personName = personName,
+                phoneNumber = phoneNumber,
+                category = category,
+                amount = amount,
+                itemDescription = itemDescription,
+                date = date,
+                time = time,
+                dueDate = dueDate,
+                note = note
+            )
+            onComplete(id)
+        }
+    }
+
+    fun updateUdhaar(
+        id: Long,
+        type: String,
+        personName: String,
+        phoneNumber: String = "",
+        category: String = "MONEY",
+        amount: Double = 0.0,
+        itemDescription: String = "",
+        date: String,
+        time: String,
+        dueDate: String = "",
+        note: String = "",
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.updateUdhaarRecord(
+                id = id,
+                type = type,
+                personName = personName,
+                phoneNumber = phoneNumber,
+                category = category,
+                amount = amount,
+                itemDescription = itemDescription,
+                date = date,
+                time = time,
+                dueDate = dueDate,
+                note = note
+            )
+            onComplete()
+        }
+    }
+
+    fun deleteUdhaar(id: Long, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.deleteUdhaarRecord(id)
+            onComplete()
+        }
+    }
+
+    fun markUdhaarItemReturned(id: Long, isReturned: Boolean = true, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.markItemReturned(id, isReturned)
+            onComplete()
+        }
+    }
+
+    fun addUdhaarRepayment(
+        udhaarId: Long,
+        amount: Double,
+        date: String = DateUtils.getCurrentDate(),
+        time: String = DateUtils.getCurrentTime(),
+        note: String = "",
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.addUdhaarRepayment(
+                udhaarId = udhaarId,
+                amount = amount,
+                date = date,
+                time = time,
+                note = note
+            )
+            onComplete()
+        }
+    }
+
+    fun deleteUdhaarRepayment(repaymentId: Long, udhaarId: Long, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.deleteUdhaarRepayment(repaymentId, udhaarId)
+            onComplete()
+        }
+    }
+
+    fun updateUdhaarRepayment(
+        repaymentId: Long,
+        udhaarId: Long,
+        amount: Double,
+        date: String,
+        time: String,
+        note: String,
+        onComplete: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.updateUdhaarRepayment(
+                repaymentId = repaymentId,
+                udhaarId = udhaarId,
+                newAmount = amount,
+                date = date,
+                time = time,
+                note = note
+            )
+            onComplete()
         }
     }
 }

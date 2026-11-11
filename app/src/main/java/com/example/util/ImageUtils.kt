@@ -15,7 +15,21 @@ import kotlin.math.max
  */
 object ImageUtils {
 
-    fun uriToBase64(context: Context, uri: Uri, maxDimension: Int = 400): String? {
+    fun createTempPictureUri(context: Context): Uri? {
+        return try {
+            val imagesDir = java.io.File(context.cacheDir, "images").apply { if (!exists()) mkdirs() }
+            val tempFile = java.io.File(imagesDir, "profile_pic_${System.currentTimeMillis()}.jpg")
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                tempFile
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun uriToBase64(context: Context, uri: Uri, maxDimension: Int = 512): String? {
         return try {
             val contentResolver = context.contentResolver
 

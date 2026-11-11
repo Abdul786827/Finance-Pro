@@ -29,6 +29,10 @@ import com.example.ui.viewmodel.FinanceViewModel
 import androidx.fragment.app.FragmentActivity
 import com.example.util.BiometricSecurityManager
 
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+
 class MainActivity : FragmentActivity() {
 
     private val viewModel: FinanceViewModel by viewModels()
@@ -42,10 +46,11 @@ class MainActivity : FragmentActivity() {
             MyApplicationTheme {
                 val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
                 val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
+                val isExternalPickerActive by viewModel.isExternalPickerActive.collectAsStateWithLifecycle()
 
-                // Session lock: Always show login screen every time app is opened (starts false)
-                var isSessionUnlocked by remember { mutableStateOf(false) }
-                var lastBackgroundTime by remember { mutableLongStateOf(0L) }
+                // Session lock: Persisted across configuration changes and picker launches
+                var isSessionUnlocked by rememberSaveable { mutableStateOf(false) }
+                var lastBackgroundTime by rememberSaveable { mutableLongStateOf(0L) }
                 val lifecycleOwner = LocalLifecycleOwner.current
 
                 // Function to prompt biometric unlock automatically
@@ -73,14 +78,20 @@ class MainActivity : FragmentActivity() {
                 }
 
                 // Auto-lock: if backgrounded/minimized for >= 1 minute (60,000ms), lock app
+                // CRITICAL FIX: Skip locking when an external picker (camera / photo gallery) launched by the app is active
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         when (event) {
                             Lifecycle.Event.ON_STOP -> {
-                                lastBackgroundTime = System.currentTimeMillis()
+                                if (!viewModel.isExternalPickerActive.value) {
+                                    lastBackgroundTime = System.currentTimeMillis()
+                                }
                             }
                             Lifecycle.Event.ON_START -> {
-                                if (lastBackgroundTime > 0L) {
+                                if (viewModel.isExternalPickerActive.value) {
+                                    // Returned from external camera or photo gallery picker, do NOT lock
+                                    lastBackgroundTime = 0L
+                                } else if (lastBackgroundTime > 0L) {
                                     val elapsed = System.currentTimeMillis() - lastBackgroundTime
                                     if (elapsed >= 60_000L) {
                                         isSessionUnlocked = false
@@ -99,11 +110,11 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
-                var currentScreen by remember { mutableStateOf(AppScreen.DASHBOARD) }
-                var showAddDialog by remember { mutableStateOf(false) }
-                var dialogInitialType by remember { mutableStateOf("INCOME") }
+                var currentScreen by rememberSaveable { mutableStateOf(AppScreen.DASHBOARD) }
+                var showAddDialog by rememberSaveable { mutableStateOf(false) }
+                var dialogInitialType by rememberSaveable { mutableStateOf("INCOME") }
                 var transactionToEdit by remember { mutableStateOf<TransactionEntity?>(null) }
-                var showTransferDialog by remember { mutableStateOf(false) }
+                var showTransferDialog by rememberSaveable { mutableStateOf(false) }
 
                 val accounts by viewModel.accounts.collectAsStateWithLifecycle()
                 val categories by viewModel.categories.collectAsStateWithLifecycle()
@@ -144,6 +155,16 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                                     actions = {
+                                        IconButton(
+                                            onClick = { currentScreen = AppScreen.UDHAAR },
+                                            modifier = Modifier.testTag("topbar_udhaar_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Handshake,
+                                                contentDescription = "Udhaar (Lend & Borrow)",
+                                                tint = if (currentScreen == AppScreen.UDHAAR) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
                                         IconButton(
                                             onClick = { currentScreen = AppScreen.SALARY_LOANS },
                                             modifier = Modifier.testTag("topbar_salary_loans_button")
@@ -197,42 +218,104 @@ class MainActivity : FragmentActivity() {
                         bottomBar = {
                             if (currentScreen != AppScreen.ADD_TRANSACTION) {
                                 NavigationBar(
-                                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars),
+                                    tonalElevation = 3.dp
                                 ) {
                                     NavigationBarItem(
                                         selected = currentScreen == AppScreen.DASHBOARD,
                                         onClick = { currentScreen = AppScreen.DASHBOARD },
                                         icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
-                                        label = { Text("Dashboard") },
+                                        label = {
+                                            Text(
+                                                text = "Dashboard",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (currentScreen == AppScreen.DASHBOARD) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
                                         modifier = Modifier.testTag("nav_dashboard")
                                     )
                                     NavigationBarItem(
                                         selected = currentScreen == AppScreen.DAILY_STATEMENT,
                                         onClick = { currentScreen = AppScreen.DAILY_STATEMENT },
                                         icon = { Icon(Icons.Default.TableChart, contentDescription = "Statement") },
-                                        label = { Text("Statement") },
+                                        label = {
+                                            Text(
+                                                text = "Statement",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (currentScreen == AppScreen.DAILY_STATEMENT) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
                                         modifier = Modifier.testTag("nav_statement")
                                     )
                                     NavigationBarItem(
                                         selected = currentScreen == AppScreen.ACCOUNTS,
                                         onClick = { currentScreen = AppScreen.ACCOUNTS },
                                         icon = { Icon(Icons.Default.AccountBalance, contentDescription = "Accounts") },
-                                        label = { Text("Accounts") },
+                                        label = {
+                                            Text(
+                                                text = "Accounts",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (currentScreen == AppScreen.ACCOUNTS) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
                                         modifier = Modifier.testTag("nav_accounts")
                                     )
                                     NavigationBarItem(
                                         selected = currentScreen == AppScreen.PETROL_EXTRA,
                                         onClick = { currentScreen = AppScreen.PETROL_EXTRA },
-                                        icon = { Icon(Icons.Default.LocalGasStation, contentDescription = "Petrol & Extra") },
-                                        label = { Text("Fuel/Extra") },
+                                        icon = { Icon(Icons.Default.LocalGasStation, contentDescription = "Fuel") },
+                                        label = {
+                                            Text(
+                                                text = "Fuel",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (currentScreen == AppScreen.PETROL_EXTRA) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
                                         modifier = Modifier.testTag("nav_petrol_extra")
                                     )
                                     NavigationBarItem(
                                         selected = currentScreen == AppScreen.STATEMENTS,
                                         onClick = { currentScreen = AppScreen.STATEMENTS },
-                                        icon = { Icon(Icons.Default.CalendarMonth, contentDescription = "Monthly & Annual") },
-                                        label = { Text("Monthly") },
+                                        icon = { Icon(Icons.Default.CalendarMonth, contentDescription = "Monthly") },
+                                        label = {
+                                            Text(
+                                                text = "Monthly",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (currentScreen == AppScreen.STATEMENTS) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
                                         modifier = Modifier.testTag("nav_statements")
+                                    )
+                                    NavigationBarItem(
+                                        selected = currentScreen == AppScreen.UDHAAR,
+                                        onClick = { currentScreen = AppScreen.UDHAAR },
+                                        icon = { Icon(Icons.Default.Handshake, contentDescription = "Udhaar") },
+                                        label = {
+                                            Text(
+                                                text = "Udhaar",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Clip,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (currentScreen == AppScreen.UDHAAR) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        modifier = Modifier.testTag("nav_udhaar")
                                     )
                                 }
                             }
@@ -282,7 +365,8 @@ class MainActivity : FragmentActivity() {
                                             dialogInitialType = type
                                             currentScreen = AppScreen.ADD_TRANSACTION
                                         }
-                                    }
+                                    },
+                                    onNavigateToUdhaar = { currentScreen = AppScreen.UDHAAR }
                                 )
 
                                 AppScreen.DAILY_STATEMENT -> DailyStatementScreen(
@@ -324,6 +408,11 @@ class MainActivity : FragmentActivity() {
 
                                 AppScreen.SALARY_LOANS -> SalaryLoansScreen(
                                     viewModel = viewModel
+                                )
+
+                                AppScreen.UDHAAR -> UdhaarScreen(
+                                    viewModel = viewModel,
+                                    onNavigateBack = { currentScreen = AppScreen.DASHBOARD }
                                 )
 
                                 AppScreen.REPORTS -> ReportsExportScreen(

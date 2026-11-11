@@ -237,4 +237,140 @@ object StatementExportUtil {
         chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(chooser)
     }
+
+    /**
+     * Dedicated Udhaar / Loans PDF statement export.
+     * Clearly separates Udhaar ledger records from bank accounts.
+     */
+    fun exportAndShareUdhaarPdf(
+        context: Context,
+        title: String,
+        records: List<com.example.data.model.UdhaarRecordEntity>
+    ) {
+        val pdfDocument = PdfDocument()
+        val pageInfo = PdfDocument.PageInfo.Builder(1000, 1400, 1).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+
+        val titlePaint = Paint().apply {
+            color = Color.rgb(0, 108, 80)
+            textSize = 22f
+            isFakeBoldText = true
+        }
+
+        val headerPaint = Paint().apply {
+            color = Color.rgb(30, 41, 59)
+            textSize = 12f
+            isFakeBoldText = true
+        }
+
+        val cellPaint = Paint().apply {
+            color = Color.rgb(51, 65, 85)
+            textSize = 11f
+        }
+
+        val givenPaint = Paint().apply {
+            color = Color.rgb(16, 185, 129)
+            textSize = 11f
+            isFakeBoldText = true
+        }
+
+        val takenPaint = Paint().apply {
+            color = Color.rgb(239, 68, 68)
+            textSize = 11f
+            isFakeBoldText = true
+        }
+
+        val linePaint = Paint().apply {
+            color = Color.rgb(226, 232, 240)
+            strokeWidth = 1f
+        }
+
+        var y = 50f
+        canvas.drawText("FINANCE PRO - UDHAAR / LOANS STATEMENT", 40f, y, titlePaint)
+        y += 20f
+        canvas.drawText(title, 40f, y, cellPaint)
+        y += 15f
+        canvas.drawText("Note: This ledger is completely separate from bank and cash account balances.", 40f, y, cellPaint)
+        y += 25f
+
+        // Table Header
+        val headerBoxPaint = Paint().apply {
+            color = Color.rgb(241, 245, 249)
+        }
+        canvas.drawRect(40f, y - 15f, 960f, y + 10f, headerBoxPaint)
+        canvas.drawText("Type", 50f, y, headerPaint)
+        canvas.drawText("Person Name", 130f, y, headerPaint)
+        canvas.drawText("Category", 300f, y, headerPaint)
+        canvas.drawText("Original", 410f, y, headerPaint)
+        canvas.drawText("Remaining", 520f, y, headerPaint)
+        canvas.drawText("Date", 640f, y, headerPaint)
+        canvas.drawText("Due Date", 760f, y, headerPaint)
+        canvas.drawText("Status", 870f, y, headerPaint)
+        y += 20f
+
+        var totalGivenPending = 0.0
+        var totalTakenPending = 0.0
+
+        for (rec in records) {
+            if (y > 1300f) break
+
+            val isGiven = rec.type == "GIVEN"
+            val typeLabel = if (isGiven) "GIVEN (Lent)" else "TAKEN (Borrowed)"
+            val typeColor = if (isGiven) givenPaint else takenPaint
+
+            if (rec.category == "MONEY" && rec.status != "SETTLED") {
+                if (isGiven) totalGivenPending += rec.remainingAmount
+                else totalTakenPending += rec.remainingAmount
+            }
+
+            canvas.drawText(typeLabel, 50f, y, typeColor)
+            canvas.drawText(rec.personName.take(18), 130f, y, cellPaint)
+            val catText = if (rec.category == "ITEM") "Item: ${rec.itemDescription}".take(16) else "Money"
+            canvas.drawText(catText, 300f, y, cellPaint)
+
+            val origText = if (rec.category == "MONEY") DateUtils.formatCurrency(rec.originalAmount) else "-"
+            val remText = if (rec.category == "MONEY") DateUtils.formatCurrency(rec.remainingAmount) else if (rec.isItemReturned) "Returned" else "Not Returned"
+            canvas.drawText(origText, 410f, y, cellPaint)
+            canvas.drawText(remText, 520f, y, typeColor)
+            canvas.drawText(rec.date, 640f, y, cellPaint)
+            canvas.drawText(if (rec.dueDate.isNotBlank()) rec.dueDate else "-", 760f, y, cellPaint)
+            canvas.drawText(rec.status, 870f, y, cellPaint)
+
+            y += 8f
+            canvas.drawLine(40f, y, 960f, y, linePaint)
+            y += 18f
+        }
+
+        // Summary footer
+        y += 15f
+        val summaryBoxPaint = Paint().apply {
+            color = Color.rgb(240, 245, 242)
+        }
+        canvas.drawRect(40f, y, 960f, y + 60f, summaryBoxPaint)
+        y += 25f
+        canvas.drawText("Total I Will Receive (Given): ${DateUtils.formatCurrency(totalGivenPending)}", 50f, y, givenPaint)
+        canvas.drawText("Total I Have to Pay (Taken): ${DateUtils.formatCurrency(totalTakenPending)}", 400f, y, takenPaint)
+        val net = totalGivenPending - totalTakenPending
+        canvas.drawText("Net Udhaar Balance: ${DateUtils.formatCurrency(net)}", 750f, y, headerPaint)
+
+        pdfDocument.finishPage(page)
+
+        val reportsDir = File(context.cacheDir, "reports")
+        if (!reportsDir.exists()) reportsDir.mkdirs()
+        val file = File(reportsDir, "Udhaar_Statement_${System.currentTimeMillis()}.pdf")
+        FileOutputStream(file).use { pdfDocument.writeTo(it) }
+        pdfDocument.close()
+
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "Udhaar & Loans Statement PDF")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(sendIntent, "Share Udhaar Statement PDF")
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(chooser)
+    }
 }

@@ -198,4 +198,54 @@ interface FinanceDao : TransactionDao {
 
     @Query("DELETE FROM monthly_statements")
     suspend fun clearMonthlyStatements()
+
+    // Udhaar Records
+    @Query("SELECT * FROM udhaar_records ORDER BY date DESC, id DESC")
+    fun getAllUdhaarRecords(): Flow<List<UdhaarRecordEntity>>
+
+    @Query("SELECT * FROM udhaar_records ORDER BY date DESC, id DESC")
+    suspend fun getAllUdhaarRecordsDirect(): List<UdhaarRecordEntity>
+
+    @Query("SELECT * FROM udhaar_records WHERE id = :id LIMIT 1")
+    suspend fun getUdhaarRecordById(id: Long): UdhaarRecordEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUdhaarRecord(record: UdhaarRecordEntity): Long
+
+    @Update
+    suspend fun updateUdhaarRecord(record: UdhaarRecordEntity)
+
+    @Delete
+    suspend fun deleteUdhaarRecord(record: UdhaarRecordEntity)
+
+    @Query("DELETE FROM udhaar_records WHERE id = :id")
+    suspend fun deleteUdhaarRecordById(id: Long)
+
+    // Udhaar Repayments
+    @Query("SELECT * FROM udhaar_repayments ORDER BY date ASC, id ASC")
+    fun getAllUdhaarRepayments(): Flow<List<UdhaarRepaymentEntity>>
+
+    @Query("SELECT * FROM udhaar_repayments WHERE udhaarId = :udhaarId ORDER BY date ASC, id ASC")
+    fun getRepaymentsForUdhaar(udhaarId: Long): Flow<List<UdhaarRepaymentEntity>>
+
+    @Query("SELECT * FROM udhaar_repayments WHERE udhaarId = :udhaarId ORDER BY date ASC, id ASC")
+    suspend fun getRepaymentsForUdhaarDirect(udhaarId: Long): List<UdhaarRepaymentEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUdhaarRepayment(repayment: UdhaarRepaymentEntity): Long
+
+    @Update
+    suspend fun updateUdhaarRepayment(repayment: UdhaarRepaymentEntity)
+
+    @Delete
+    suspend fun deleteUdhaarRepayment(repayment: UdhaarRepaymentEntity)
+
+    @Query("DELETE FROM udhaar_repayments WHERE id = :id")
+    suspend fun deleteUdhaarRepaymentById(id: Long)
+
+    @Query("DELETE FROM udhaar_records")
+    suspend fun clearUdhaarRecords()
+
+    @Query("DELETE FROM udhaar_repayments")
+    suspend fun clearUdhaarRepayments()
 }

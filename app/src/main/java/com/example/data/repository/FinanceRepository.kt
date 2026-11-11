@@ -20,6 +20,8 @@ class FinanceRepository(private val dao: FinanceDao) {
     val monthlyStatements: Flow<List<MonthlyStatementEntity>> = dao.getAllMonthlyStatements()
     val userProfile: Flow<UserProfileEntity?> = dao.getUserProfile()
     val categories: Flow<List<CategoryEntity>> = dao.getAllCategories()
+    val udhaarRecords: Flow<List<UdhaarRecordEntity>> = dao.getAllUdhaarRecords()
+    val udhaarRepayments: Flow<List<UdhaarRepaymentEntity>> = dao.getAllUdhaarRepayments()
 
     suspend fun initializeIfEmpty() {
         val existingAccounts = dao.getAllAccountsDirect()
@@ -626,7 +628,217 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.clearSalary()
         dao.clearLoans()
         dao.clearMonthlyStatements()
+        dao.clearUdhaarRecords()
+        dao.clearUdhaarRepayments()
         dao.insertAccounts(SeedData.defaultAccounts)
+    }
+
+    // --- UDHAAR (LEND & BORROW) SEPARATE LEDGER METHODS ---
+    // Rule: Never touches bank/wallet accounts, never modifies income or expenses
+
+    fun getRepaymentsForUdhaar(udhaarId: Long): Flow<List<UdhaarRepaymentEntity>> {
+        return dao.getRepaymentsForUdhaar(udhaarId)
+    }
+
+    suspend fun addUdhaarRecord(
+        type: String, // "GIVEN" or "TAKEN"
+        personName: String,
+        phoneNumber: String = "",
+        category: String = "MONEY", // "MONEY" or "ITEM"
+        amount: Double = 0.0,
+        itemDescription: String = "",
+        date: String = DateUtils.getCurrentDate(),
+        time: String = DateUtils.getCurrentTime(),
+        dueDate: String = "",
+        note: String = ""
+    ): Long {
+        val cleanName = personName.trim()
+        val dayOfWeek = DateUtils.getDayOfWeek(date)
+        val initialStatus = if (category == "ITEM") "PENDING" else if (amount <= 0.0) "SETTLED" else "PENDING"
+        val record = UdhaarRecordEntity(
+            type = type,
+            personName = cleanName,
+            phoneNumber = phoneNumber.trim(),
+            category = category,
+            originalAmount = if (category == "MONEY") amount else 0.0,
+            remainingAmount = if (category == "MONEY") amount else 0.0,
+            itemDescription = if (category == "ITEM") itemDescription.trim() else "",
+            date = date,
+            time = DateUtils.format12HourTime(time),
+            dayOfWeek = dayOfWeek,
+            dueDate = dueDate.trim(),
+            note = note.trim(),
+            status = initialStatus,
+            isItemReturned = false,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        return dao.insertUdhaarRecord(record)
+    }
+
+    suspend fun updateUdhaarRecord(
+        id: Long,
+        type: String,
+        personName: String,
+        phoneNumber: String = "",
+        category: String = "MONEY",
+        amount: Double = 0.0,
+        itemDescription: String = "",
+        date: String,
+        time: String,
+        dueDate: String = "",
+        note: String = ""
+    ) {
+        val existing = dao.getUdhaarRecordById(id) ?: return
+        val dayOfWeek = DateUtils.getDayOfWeek(date)
+        val repayments = dao.getRepaymentsForUdhaarDirect(id)
+        val totalRepaid = repayments.sumOf { it.amount }
+
+        val newRemaining = if (category == "MONEY") {
+            (amount - totalRepaid).coerceAtLeast(0.0)
+        } else {
+            0.0
+        }
+
+        val newStatus = if (category == "ITEM") {
+            if (existing.isItemReturned) "SETTLED" else "PENDING"
+        } else {
+            when {
+                newRemaining <= 0.0001 -> "SETTLED"
+                totalRepaid > 0.0 -> "PARTIAL"
+                else -> "PENDING"
+            }
+        }
+
+        val updated = existing.copy(
+            type = type,
+            personName = personName.trim(),
+            phoneNumber = phoneNumber.trim(),
+            category = category,
+            originalAmount = if (category == "MONEY") amount else 0.0,
+            remainingAmount = newRemaining,
+            itemDescription = if (category == "ITEM") itemDescription.trim() else "",
+            date = date,
+            time = DateUtils.format12HourTime(time),
+            dayOfWeek = dayOfWeek,
+            dueDate = dueDate.trim(),
+            note = note.trim(),
+            status = newStatus,
+            updatedAt = System.currentTimeMillis()
+        )
+        dao.updateUdhaarRecord(updated)
+    }
+
+    suspend fun deleteUdhaarRecord(id: Long) {
+        dao.deleteUdhaarRecordById(id)
+    }
+
+    suspend fun markItemReturned(id: Long, isReturned: Boolean = true) {
+        val existing = dao.getUdhaarRecordById(id) ?: return
+        val updated = existing.copy(
+            isItemReturned = isReturned,
+            status = if (isReturned) "SETTLED" else "PENDING",
+            updatedAt = System.currentTimeMillis()
+        )
+        dao.updateUdhaarRecord(updated)
+    }
+
+    suspend fun addUdhaarRepayment(
+        udhaarId: Long,
+        amount: Double,
+        date: String = DateUtils.getCurrentDate(),
+        time: String = DateUtils.getCurrentTime(),
+        note: String = ""
+    ): Long {
+        val record = dao.getUdhaarRecordById(udhaarId) ?: return 0L
+        val dayOfWeek = DateUtils.getDayOfWeek(date)
+        val repayment = UdhaarRepaymentEntity(
+            udhaarId = udhaarId,
+            amount = amount,
+            date = date,
+            time = DateUtils.format12HourTime(time),
+            dayOfWeek = dayOfWeek,
+            note = note.trim(),
+            createdAt = System.currentTimeMillis()
+        )
+        val repId = dao.insertUdhaarRepayment(repayment)
+
+        // Recalculate remaining balance
+        val allRepayments = dao.getRepaymentsForUdhaarDirect(udhaarId)
+        val totalRepaid = allRepayments.sumOf { it.amount }
+        val remaining = (record.originalAmount - totalRepaid).coerceAtLeast(0.0)
+        val newStatus = when {
+            remaining <= 0.0001 -> "SETTLED"
+            totalRepaid > 0.0 -> "PARTIAL"
+            else -> "PENDING"
+        }
+
+        dao.updateUdhaarRecord(
+            record.copy(
+                remainingAmount = remaining,
+                status = newStatus,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+        return repId
+    }
+
+    suspend fun deleteUdhaarRepayment(repaymentId: Long, udhaarId: Long) {
+        dao.deleteUdhaarRepaymentById(repaymentId)
+        val record = dao.getUdhaarRecordById(udhaarId) ?: return
+        val remainingRepayments = dao.getRepaymentsForUdhaarDirect(udhaarId)
+        val totalRepaid = remainingRepayments.sumOf { it.amount }
+        val remaining = (record.originalAmount - totalRepaid).coerceAtLeast(0.0)
+        val newStatus = when {
+            remaining <= 0.0001 -> "SETTLED"
+            totalRepaid > 0.0 -> "PARTIAL"
+            else -> "PENDING"
+        }
+        dao.updateUdhaarRecord(
+            record.copy(
+                remainingAmount = remaining,
+                status = newStatus,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun updateUdhaarRepayment(
+        repaymentId: Long,
+        udhaarId: Long,
+        newAmount: Double,
+        date: String,
+        time: String,
+        note: String
+    ) {
+        val dayOfWeek = DateUtils.getDayOfWeek(date)
+        val repayment = UdhaarRepaymentEntity(
+            id = repaymentId,
+            udhaarId = udhaarId,
+            amount = newAmount,
+            date = date,
+            time = DateUtils.format12HourTime(time),
+            dayOfWeek = dayOfWeek,
+            note = note.trim()
+        )
+        dao.updateUdhaarRepayment(repayment)
+
+        val record = dao.getUdhaarRecordById(udhaarId) ?: return
+        val allRepayments = dao.getRepaymentsForUdhaarDirect(udhaarId)
+        val totalRepaid = allRepayments.sumOf { it.amount }
+        val remaining = (record.originalAmount - totalRepaid).coerceAtLeast(0.0)
+        val newStatus = when {
+            remaining <= 0.0001 -> "SETTLED"
+            totalRepaid > 0.0 -> "PARTIAL"
+            else -> "PENDING"
+        }
+        dao.updateUdhaarRecord(
+            record.copy(
+                remainingAmount = remaining,
+                status = newStatus,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
     }
 
     suspend fun registerUser(

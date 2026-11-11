@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.TransactionEntity
 import com.example.ui.components.AccountDistributionDonutChart
@@ -35,6 +36,7 @@ fun DashboardScreen(
     onNavigateToStatement: () -> Unit,
     onNavigateToAccounts: () -> Unit,
     onQuickAdd: (String) -> Unit,
+    onNavigateToUdhaar: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val totalBalance by viewModel.totalAvailableBalance.collectAsStateWithLifecycle()
@@ -215,6 +217,120 @@ fun DashboardScreen(
                     color = FinanceExtraPurple,
                     modifier = Modifier.weight(1f)
                 )
+            }
+        }
+
+        // Udhaar / Loans Summary Card (Completely separate from bank/wallet accounts)
+        item {
+            val udhaarToReceive by viewModel.udhaarTotalToReceive.collectAsStateWithLifecycle()
+            val udhaarToPay by viewModel.udhaarTotalToPay.collectAsStateWithLifecycle()
+            val udhaarNet by viewModel.udhaarNetBalance.collectAsStateWithLifecycle()
+            val pendingItems by viewModel.udhaarPendingItemsCount.collectAsStateWithLifecycle()
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateToUdhaar() }
+                    .testTag("dashboard_udhaar_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = CircleShape,
+                                color = EmeraldPrimaryLight.copy(alpha = 0.15f),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Handshake,
+                                        contentDescription = null,
+                                        tint = EmeraldPrimaryLight,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Udhaar Ledger (Separate)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Independent loans & lent items • Zero account impact",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        TextButton(
+                            onClick = onNavigateToUdhaar,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Open", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("To Receive (Given)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = DateUtils.formatCurrency(udhaarToReceive),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = FinanceIncomeGreen
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("To Pay (Taken)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = DateUtils.formatCurrency(udhaarToPay),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = FinanceExpenseRed
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Net Udhaar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = DateUtils.formatCurrency(udhaarNet),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (udhaarNet >= 0) EmeraldPrimaryLight else FinanceExpenseRed
+                            )
+                        }
+                    }
+
+                    if (pendingItems > 0) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "• $pendingItems lent/borrowed item(s) pending return",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
 

@@ -168,8 +168,57 @@ data class CategoryEntity(
     val colorHex: String = "#006C50"
 )
 
+/**
+ * Completely separate ledger for Udhaar / Loans (Lend & Borrow).
+ * Never touches bank/wallet balances, never counts as income/expense in statement/monthly/dashboard.
+ */
+@Entity(tableName = "udhaar_records")
+data class UdhaarRecordEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val type: String, // "GIVEN" (Maine udhaar diya) or "TAKEN" (Maine udhaar liya)
+    val personName: String, // Required
+    val phoneNumber: String = "", // Optional
+    val category: String = "MONEY", // "MONEY" or "ITEM"
+    val originalAmount: Double = 0.0, // For MONEY
+    val remainingAmount: Double = 0.0, // For MONEY: originalAmount - totalRepaid
+    val itemDescription: String = "", // For ITEM (e.g. "Laptop", "Book")
+    val date: String, // YYYY-MM-DD
+    val time: String, // HH:mm:ss or 12-hour format
+    val dayOfWeek: String = "", // e.g. "Monday"
+    val dueDate: String = "", // YYYY-MM-DD (optional return/due date)
+    val note: String = "", // Optional notes
+    val status: String = "PENDING", // "PENDING", "PARTIAL", "SETTLED"
+    val isItemReturned: Boolean = false, // For ITEM category
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "udhaar_repayments",
+    foreignKeys = [
+        androidx.room.ForeignKey(
+            entity = UdhaarRecordEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["udhaarId"],
+            onDelete = androidx.room.ForeignKey.CASCADE
+        )
+    ],
+    indices = [androidx.room.Index("udhaarId")]
+)
+data class UdhaarRepaymentEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val udhaarId: Long,
+    val amount: Double,
+    val date: String, // YYYY-MM-DD
+    val time: String, // 12-hour AM/PM or HH:mm:ss
+    val dayOfWeek: String = "",
+    val note: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 sealed class AuthResult {
     data class Success(val profile: UserProfileEntity) : AuthResult()
     data class EmailNotVerified(val email: String, val token: String) : AuthResult()
     data class Error(val message: String) : AuthResult()
 }
+

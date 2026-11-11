@@ -89,6 +89,24 @@ fun ReportsExportScreen(
         }
 
         item {
+            val udhaarList by viewModel.udhaarRecords.collectAsStateWithLifecycle()
+            ExportActionCard(
+                title = "Udhaar (Lend & Borrow) PDF Statement",
+                description = "Export a dedicated PDF statement for all Given & Taken loans and lent items, including repayments, dues, and net balance.",
+                icon = Icons.Default.Handshake,
+                buttonLabel = "Export Udhaar PDF",
+                testTag = "export_udhaar_pdf_action",
+                onClick = {
+                    StatementExportUtil.exportAndShareUdhaarPdf(
+                        context = context,
+                        title = "Udhaar & Loans Report (${DateUtils.getCurrentDate()})",
+                        records = udhaarList
+                    )
+                }
+            )
+        }
+
+        item {
             Text(
                 text = "Excel & CSV Exports (Excel Structure)",
                 style = MaterialTheme.typography.titleMedium,

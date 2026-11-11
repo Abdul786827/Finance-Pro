@@ -8,6 +8,7 @@ enum class AppScreen(val title: String, val iconName: String) {
     PETROL_EXTRA("Petrol & Extra", "local_gas_station"),
     STATEMENTS("Monthly & Annual", "calendar_month"),
     SALARY_LOANS("Salary & Loans", "payments"),
+    UDHAAR("Udhaar (Lend & Borrow)", "handshake"),
     REPORTS("Reports & Export", "picture_as_pdf"),
     SETTINGS("Profile & Settings", "settings")
 }
