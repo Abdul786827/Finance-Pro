@@ -47,6 +47,7 @@ fun UdhaarScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val records by viewModel.udhaarRecords.collectAsStateWithLifecycle()
     val repayments by viewModel.udhaarRepayments.collectAsStateWithLifecycle()
 
@@ -125,7 +126,7 @@ fun UdhaarScreen(
         ) {
             item {
                 Spacer(modifier = Modifier.height(4.dp))
-                // Ledger Notice Banner (Clarifies zero account impact)
+                // Ledger Notice Banner (Clarifies account connectivity)
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = EmeraldPrimaryLight.copy(alpha = 0.08f),
@@ -143,7 +144,7 @@ fun UdhaarScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Separate Udhaar Ledger: Records and repayments never modify your bank/wallet balances or statement totals.",
+                            text = "Connected Udhaar Ledger: Money records and repayments automatically update bank & wallet balances and appear in your Statement.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -452,11 +453,12 @@ fun UdhaarScreen(
     if (showAddEditDialog) {
         UdhaarAddEditDialog(
             recordToEdit = recordToEdit,
+            accounts = accounts,
             onDismiss = {
                 showAddEditDialog = false
                 recordToEdit = null
             },
-            onSave = { type, name, phone, category, amount, itemDesc, date, time, dueDate, note ->
+            onSave = { type, name, phone, category, amount, accName, itemDesc, date, time, dueDate, note, onError ->
                 if (recordToEdit != null) {
                     viewModel.updateUdhaar(
                         id = recordToEdit!!.id,
@@ -465,11 +467,17 @@ fun UdhaarScreen(
                         phoneNumber = phone,
                         category = category,
                         amount = amount,
+                        accountName = accName,
                         itemDescription = itemDesc,
                         date = date,
                         time = time,
                         dueDate = dueDate,
-                        note = note
+                        note = note,
+                        onError = onError,
+                        onSuccess = {
+                            showAddEditDialog = false
+                            recordToEdit = null
+                        }
                     )
                 } else {
                     viewModel.addUdhaar(
@@ -478,15 +486,19 @@ fun UdhaarScreen(
                         phoneNumber = phone,
                         category = category,
                         amount = amount,
+                        accountName = accName,
                         itemDescription = itemDesc,
                         date = date,
                         time = time,
                         dueDate = dueDate,
-                        note = note
+                        note = note,
+                        onError = onError,
+                        onSuccess = {
+                            showAddEditDialog = false
+                            recordToEdit = null
+                        }
                     )
                 }
-                showAddEditDialog = false
-                recordToEdit = null
             }
         )
     }
@@ -496,32 +508,43 @@ fun UdhaarScreen(
         UdhaarRepaymentDialog(
             record = recordForRepayment!!,
             repaymentToEdit = repaymentToEdit,
+            accounts = accounts,
             onDismiss = {
                 recordForRepayment = null
                 repaymentToEdit = null
             },
-            onSave = { amt, date, time, note ->
+            onSave = { amt, accName, date, time, note, onError ->
                 val rep = repaymentToEdit
                 if (rep != null) {
                     viewModel.updateUdhaarRepayment(
                         repaymentId = rep.id,
                         udhaarId = recordForRepayment!!.id,
                         amount = amt,
+                        accountName = accName,
                         date = date,
                         time = time,
-                        note = note
+                        note = note,
+                        onError = onError,
+                        onSuccess = {
+                            recordForRepayment = null
+                            repaymentToEdit = null
+                        }
                     )
                 } else {
                     viewModel.addUdhaarRepayment(
                         udhaarId = recordForRepayment!!.id,
                         amount = amt,
+                        accountName = accName,
                         date = date,
                         time = time,
-                        note = note
+                        note = note,
+                        onError = onError,
+                        onSuccess = {
+                            recordForRepayment = null
+                            repaymentToEdit = null
+                        }
                     )
                 }
-                recordForRepayment = null
-                repaymentToEdit = null
             }
         )
     }
@@ -534,7 +557,7 @@ fun UdhaarScreen(
             title = { Text("Delete Udhaar Record?") },
             text = {
                 Text(
-                    text = "Are you sure you want to delete this record for ${recordToDelete!!.personName}? All recorded repayments for this entry will also be permanently deleted. (No bank accounts will be affected)."
+                    text = "Are you sure you want to delete this record for ${recordToDelete!!.personName}? All recorded repayments for this entry will also be permanently deleted, and affected account balances will be restored."
                 )
             },
             confirmButton = {
@@ -542,7 +565,7 @@ fun UdhaarScreen(
                     onClick = {
                         viewModel.deleteUdhaar(recordToDelete!!.id)
                         recordToDelete = null
-                        Toast.makeText(context, "Udhaar record deleted", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Udhaar record deleted and balance restored", Toast.LENGTH_SHORT).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = FinanceExpenseRed)
                 ) {
@@ -562,13 +585,14 @@ fun UdhaarScreen(
         AlertDialog(
             onDismissRequest = { repaymentToDelete = null },
             title = { Text("Delete Repayment?") },
-            text = { Text("Are you sure you want to delete this repayment? The remaining Udhaar amount will be automatically restored.") },
+            text = { Text("Are you sure you want to delete this repayment? The connected account balance and remaining Udhaar amount will be automatically restored.") },
             confirmButton = {
                 Button(
                     onClick = {
                         val pair = repaymentToDelete!!
                         viewModel.deleteUdhaarRepayment(pair.first, pair.second)
                         repaymentToDelete = null
+                        Toast.makeText(context, "Repayment deleted and balance restored", Toast.LENGTH_SHORT).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = FinanceExpenseRed)
                 ) {
@@ -773,6 +797,23 @@ fun UdhaarRecordCard(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                         }
+                    } else {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBalance,
+                                contentDescription = null,
+                                tint = if (record.accountName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (record.accountName.isNotBlank()) "Account: ${record.accountName}" else "Account: Not linked",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (record.accountName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
@@ -944,7 +985,7 @@ fun UdhaarRecordCard(
                                                 color = FinanceIncomeGreen
                                             )
                                             Text(
-                                                text = "${rep.date} • ${DateUtils.format12HourTime(rep.time)}${if (rep.note.isNotBlank()) " • ${rep.note}" else ""}",
+                                                text = "${rep.date} • ${DateUtils.format12HourTime(rep.time)}${if (rep.accountName.isNotBlank()) " • ${rep.accountName}" else ""}${if (rep.note.isNotBlank()) " • ${rep.note}" else ""}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -988,6 +1029,7 @@ fun UdhaarRecordCard(
 @Composable
 fun UdhaarAddEditDialog(
     recordToEdit: UdhaarRecordEntity? = null,
+    accounts: List<com.example.data.model.AccountEntity>,
     onDismiss: () -> Unit,
     onSave: (
         type: String,
@@ -995,11 +1037,13 @@ fun UdhaarAddEditDialog(
         phoneNumber: String,
         category: String,
         amount: Double,
+        accountName: String,
         itemDescription: String,
         date: String,
         time: String,
         dueDate: String,
-        note: String
+        note: String,
+        onError: (String) -> Unit
     ) -> Unit
 ) {
     var type by remember { mutableStateOf(recordToEdit?.type ?: "GIVEN") }
@@ -1008,6 +1052,15 @@ fun UdhaarAddEditDialog(
     var category by remember { mutableStateOf(recordToEdit?.category ?: "MONEY") }
     var amountText by remember { mutableStateOf(if (recordToEdit != null && recordToEdit.category == "MONEY") recordToEdit.originalAmount.toString() else "") }
     var itemDescription by remember { mutableStateOf(recordToEdit?.itemDescription ?: "") }
+
+    var selectedAccountName by remember {
+        mutableStateOf(
+            recordToEdit?.accountName?.ifBlank { accounts.firstOrNull()?.name ?: "HBL" }
+                ?: accounts.firstOrNull()?.name
+                ?: "HBL"
+        )
+    }
+    var accountDropdownExpanded by remember { mutableStateOf(false) }
 
     var dateText by remember { mutableStateOf(recordToEdit?.date ?: DateUtils.getCurrentDate()) }
     val dayText by remember(dateText) { derivedStateOf { DateUtils.getDayOfWeek(dateText) } }
@@ -1127,6 +1180,79 @@ fun UdhaarAddEditDialog(
                             .testTag("udhaar_amount_input"),
                         singleLine = true
                     )
+
+                    // Account Selector (Required for Money)
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = if (selectedAccountName.isNotBlank()) selectedAccountName else "Select Account",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Account (Bank / Wallet) *") },
+                            leadingIcon = { Icon(Icons.Default.AccountBalance, contentDescription = null) },
+                            trailingIcon = {
+                                IconButton(onClick = { accountDropdownExpanded = !accountDropdownExpanded }) {
+                                    Icon(if (accountDropdownExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown, contentDescription = null)
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("udhaar_account_selector"),
+                            singleLine = true
+                        )
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clickable { accountDropdownExpanded = true }
+                        )
+
+                        DropdownMenu(
+                            expanded = accountDropdownExpanded,
+                            onDismissRequest = { accountDropdownExpanded = false }
+                        ) {
+                            accounts.forEach { acc ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(acc.name, fontWeight = FontWeight.Bold)
+                                            Spacer(modifier = Modifier.width(16.dp))
+                                            Text(
+                                                DateUtils.formatCurrency(acc.currentBalance),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        selectedAccountName = acc.name
+                                        accountDropdownExpanded = false
+                                        validationError = null
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (recordToEdit != null && recordToEdit.accountName.isBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = EmeraldPrimaryLight.copy(alpha = 0.12f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Info, contentDescription = null, tint = EmeraldPrimaryLight, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Currently Not Linked: Selecting an account will connect this record and update its balance.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
                 } else {
                     OutlinedTextField(
                         value = itemDescription,
@@ -1256,9 +1382,15 @@ fun UdhaarAddEditDialog(
                         validationError = "Please enter person name."
                         return@Button
                     }
-                    if (category == "MONEY" && (amountText.toDoubleOrNull() ?: 0.0) <= 0.0) {
-                        validationError = "Please enter a valid amount greater than 0."
-                        return@Button
+                    if (category == "MONEY") {
+                        if ((amountText.toDoubleOrNull() ?: 0.0) <= 0.0) {
+                            validationError = "Please enter a valid amount greater than 0."
+                            return@Button
+                        }
+                        if (selectedAccountName.isBlank()) {
+                            validationError = "Please select an account for money records."
+                            return@Button
+                        }
                     }
                     if (category == "ITEM" && itemDescription.isBlank()) {
                         validationError = "Please describe the item."
@@ -1271,11 +1403,13 @@ fun UdhaarAddEditDialog(
                         phoneNumber.trim(),
                         category,
                         amountText.toDoubleOrNull() ?: 0.0,
+                        if (category == "MONEY") selectedAccountName else "",
                         itemDescription.trim(),
                         dateText,
                         timeText,
                         dueDateText,
-                        noteText.trim()
+                        noteText.trim(),
+                        { err -> validationError = err }
                     )
                 },
                 modifier = Modifier.testTag("udhaar_save_button")
@@ -1392,10 +1526,20 @@ fun UdhaarAddEditDialog(
 fun UdhaarRepaymentDialog(
     record: UdhaarRecordEntity,
     repaymentToEdit: UdhaarRepaymentEntity? = null,
+    accounts: List<com.example.data.model.AccountEntity>,
     onDismiss: () -> Unit,
-    onSave: (amount: Double, date: String, time: String, note: String) -> Unit
+    onSave: (amount: Double, accountName: String, date: String, time: String, note: String, onError: (String) -> Unit) -> Unit
 ) {
     var amountText by remember { mutableStateOf(if (repaymentToEdit != null) repaymentToEdit.amount.toString() else record.remainingAmount.toString()) }
+    var selectedAccountName by remember {
+        mutableStateOf(
+            repaymentToEdit?.accountName?.ifBlank {
+                record.accountName.ifBlank { accounts.firstOrNull()?.name ?: "HBL" }
+            } ?: record.accountName.ifBlank { accounts.firstOrNull()?.name ?: "HBL" }
+        )
+    }
+    var accountDropdownExpanded by remember { mutableStateOf(false) }
+
     var dateText by remember { mutableStateOf(repaymentToEdit?.date ?: DateUtils.getCurrentDate()) }
     var timeText by remember { mutableStateOf(repaymentToEdit?.time ?: DateUtils.getCurrentTime()) }
     var noteText by remember { mutableStateOf(repaymentToEdit?.note ?: "") }
@@ -1434,6 +1578,59 @@ fun UdhaarRepaymentDialog(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
+
+                // Account Selector
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = if (selectedAccountName.isNotBlank()) selectedAccountName else "Select Account",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Account *") },
+                        leadingIcon = { Icon(Icons.Default.AccountBalance, contentDescription = null) },
+                        trailingIcon = {
+                            IconButton(onClick = { accountDropdownExpanded = !accountDropdownExpanded }) {
+                                Icon(if (accountDropdownExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown, contentDescription = null)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { accountDropdownExpanded = true }
+                    )
+
+                    DropdownMenu(
+                        expanded = accountDropdownExpanded,
+                        onDismissRequest = { accountDropdownExpanded = false }
+                    ) {
+                        accounts.forEach { acc ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(acc.name, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Text(
+                                            DateUtils.formatCurrency(acc.currentBalance),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    selectedAccountName = acc.name
+                                    accountDropdownExpanded = false
+                                    errorMsg = null
+                                }
+                            )
+                        }
+                    }
+                }
 
                 // Date
                 Box(modifier = Modifier.fillMaxWidth()) {
@@ -1480,7 +1677,7 @@ fun UdhaarRepaymentDialog(
                 )
 
                 errorMsg?.let { err ->
-                    Text(err, color = FinanceExpenseRed, style = MaterialTheme.typography.bodySmall)
+                    Text(err, color = FinanceExpenseRed, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                 }
             }
         },
@@ -1492,7 +1689,11 @@ fun UdhaarRepaymentDialog(
                         errorMsg = "Please enter an amount greater than 0."
                         return@Button
                     }
-                    onSave(amt, dateText, timeText, noteText.trim())
+                    if (selectedAccountName.isBlank()) {
+                        errorMsg = "Please select an account."
+                        return@Button
+                    }
+                    onSave(amt, selectedAccountName, dateText, timeText, noteText.trim(), { err -> errorMsg = err })
                 }
             ) {
                 Text("Save Payment")

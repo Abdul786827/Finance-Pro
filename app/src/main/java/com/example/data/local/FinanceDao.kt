@@ -231,6 +231,9 @@ interface FinanceDao : TransactionDao {
     @Query("SELECT * FROM udhaar_repayments WHERE udhaarId = :udhaarId ORDER BY date ASC, id ASC")
     suspend fun getRepaymentsForUdhaarDirect(udhaarId: Long): List<UdhaarRepaymentEntity>
 
+    @Query("SELECT * FROM udhaar_repayments WHERE id = :id LIMIT 1")
+    suspend fun getUdhaarRepaymentById(id: Long): UdhaarRepaymentEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUdhaarRepayment(repayment: UdhaarRepaymentEntity): Long
 

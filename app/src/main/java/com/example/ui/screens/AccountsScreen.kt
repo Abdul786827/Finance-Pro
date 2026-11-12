@@ -264,8 +264,17 @@ private fun AccountTxRow(tx: TransactionEntity, currentAccount: String) {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val icon = if (tx.type == "TRANSFER") Icons.Default.SwapHoriz else if (isIncoming) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward
-                val tint = if (tx.type == "TRANSFER") FinanceTransferBlue else if (isIncoming) FinanceIncomeGreen else FinanceExpenseRed
+                val icon = when {
+                    tx.type == "UDHAAR" -> Icons.Default.Handshake
+                    tx.type == "TRANSFER" -> Icons.Default.SwapHoriz
+                    isIncoming -> Icons.Default.ArrowDownward
+                    else -> Icons.Default.ArrowUpward
+                }
+                val tint = when {
+                    tx.type == "TRANSFER" -> FinanceTransferBlue
+                    isIncoming -> FinanceIncomeGreen
+                    else -> FinanceExpenseRed
+                }
 
                 Box(
                     modifier = Modifier
@@ -306,9 +315,10 @@ private fun AccountTxRow(tx: TransactionEntity, currentAccount: String) {
                     color = color
                 )
                 Text(
-                    text = tx.type,
+                    text = if (tx.type == "UDHAAR") "Udhaar" else tx.type,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (tx.type == "UDHAAR") Color(0xFF7C3AED) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (tx.type == "UDHAAR") FontWeight.Bold else FontWeight.Normal
                 )
             }
         }

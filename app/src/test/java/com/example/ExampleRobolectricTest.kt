@@ -274,4 +274,340 @@ class ExampleRobolectricTest {
         assertEquals("WALLET", jazzcash!!.accountType)
         assertTrue(com.example.data.model.isWalletAccount(jazzcash))
     }
+
+    @Test
+    fun testUdhaarGivenFromHBLDecreasesBalance() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val hblAcc = dao.getAllAccountsDirect().find { it.name == "HBL" }!!
+        dao.updateAccount(hblAcc.copy(currentBalance = 50000.0))
+        val hblBefore = 50000.0
+
+        val loanAmount = 5000.0
+        val recordId = repository.addUdhaarRecord(
+            type = "GIVEN",
+            personName = "Ali Khan",
+            phoneNumber = "03001234567",
+            category = "MONEY",
+            amount = loanAmount,
+            accountName = "HBL",
+            note = "Emergency loan"
+        )
+
+        val record = dao.getUdhaarRecordById(recordId)
+        assertNotNull(record)
+        assertEquals("GIVEN", record!!.type)
+        assertEquals("HBL", record.accountName)
+        assertEquals(loanAmount, record.originalAmount, 0.001)
+        assertEquals(loanAmount, record.remainingAmount, 0.001)
+        assertEquals("PENDING", record.status)
+        assertTrue(record.transactionId > 0)
+
+        // HBL balance must decrease by loanAmount
+        val accountsAfter = dao.getAllAccountsDirect().associateBy { it.name }
+        val hblAfter = accountsAfter["HBL"]?.currentBalance ?: 0.0
+        assertEquals(hblBefore - loanAmount, hblAfter, 0.001)
+
+        // Linked transaction check
+        val tx = dao.getTransactionById(record.transactionId)
+        assertNotNull(tx)
+        assertEquals("UDHAAR", tx!!.type)
+        assertEquals("HBL", tx.fromAccount)
+        assertEquals("Ali Khan", tx.toAccount)
+        assertEquals(loanAmount, tx.amount, 0.001)
+        assertEquals("Udhaar Given: Ali Khan", tx.description)
+    }
+
+    @Test
+    fun testUdhaarTakenIntoJazzCashIncreasesBalance() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val accountsBefore = dao.getAllAccountsDirect().associateBy { it.name }
+        val jazzBefore = accountsBefore["JazzCash"]?.currentBalance ?: 0.0
+
+        val borrowedAmount = 8000.0
+        val recordId = repository.addUdhaarRecord(
+            type = "TAKEN",
+            personName = "Ahmed Raza",
+            category = "MONEY",
+            amount = borrowedAmount,
+            accountName = "JazzCash"
+        )
+
+        val record = dao.getUdhaarRecordById(recordId)
+        assertNotNull(record)
+        assertEquals("TAKEN", record!!.type)
+        assertEquals("JazzCash", record.accountName)
+        assertEquals(borrowedAmount, record.originalAmount, 0.001)
+
+        // JazzCash balance must increase by borrowedAmount
+        val accountsAfter = dao.getAllAccountsDirect().associateBy { it.name }
+        val jazzAfter = accountsAfter["JazzCash"]?.currentBalance ?: 0.0
+        assertEquals(jazzBefore + borrowedAmount, jazzAfter, 0.001)
+
+        // Linked transaction check
+        val tx = dao.getTransactionById(record.transactionId)
+        assertNotNull(tx)
+        assertEquals("UDHAAR", tx!!.type)
+        assertEquals("Ahmed Raza", tx.fromAccount)
+        assertEquals("JazzCash", tx.toAccount)
+        assertEquals(borrowedAmount, tx.amount, 0.001)
+        assertEquals("Udhaar Taken: Ahmed Raza", tx.description)
+    }
+
+    @Test
+    fun testUdhaarRepaymentsBothWaysAndSettlement() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val hblAcc = dao.getAllAccountsDirect().find { it.name == "HBL" }!!
+        dao.updateAccount(hblAcc.copy(currentBalance = 50000.0))
+        val hblStart = 50000.0
+
+        val givenId = repository.addUdhaarRecord(
+            type = "GIVEN",
+            personName = "Usman",
+            category = "MONEY",
+            amount = 10000.0,
+            accountName = "HBL"
+        )
+        val hblAfterGiven = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblStart - 10000.0, hblAfterGiven, 0.001)
+
+        // Partial repayment of 4,000 received into HBL
+        val rep1Id = repository.addUdhaarRepayment(
+            udhaarId = givenId,
+            amount = 4000.0,
+            accountName = "HBL"
+        )
+        assertTrue(rep1Id > 0)
+        val hblAfterRep1 = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblAfterGiven + 4000.0, hblAfterRep1, 0.001)
+
+        val givenRecordPartial = dao.getUdhaarRecordById(givenId)!!
+        assertEquals(6000.0, givenRecordPartial.remainingAmount, 0.001)
+        assertEquals("PARTIAL", givenRecordPartial.status)
+
+        // Second repayment of 6,000 received into HBL -> Full settlement
+        repository.addUdhaarRepayment(
+            udhaarId = givenId,
+            amount = 6000.0,
+            accountName = "HBL"
+        )
+        val hblFinal = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblStart, hblFinal, 0.001)
+
+        val givenRecordSettled = dao.getUdhaarRecordById(givenId)!!
+        assertEquals(0.0, givenRecordSettled.remainingAmount, 0.001)
+        assertEquals("SETTLED", givenRecordSettled.status)
+
+        // 2. Taken 5,000 into Sadapay
+        val sadaStart = dao.getAllAccountsDirect().find { it.name == "Sadapay" }!!.currentBalance
+        val takenId = repository.addUdhaarRecord(
+            type = "TAKEN",
+            personName = "Tariq",
+            category = "MONEY",
+            amount = 5000.0,
+            accountName = "Sadapay"
+        )
+        val sadaAfterTaken = dao.getAllAccountsDirect().find { it.name == "Sadapay" }!!.currentBalance
+        assertEquals(sadaStart + 5000.0, sadaAfterTaken, 0.001)
+
+        // Repayment paid back 5,000 from Sadapay
+        repository.addUdhaarRepayment(
+            udhaarId = takenId,
+            amount = 5000.0,
+            accountName = "Sadapay"
+        )
+        val sadaFinal = dao.getAllAccountsDirect().find { it.name == "Sadapay" }!!.currentBalance
+        assertEquals(sadaStart, sadaFinal, 0.001)
+
+        val takenRecordSettled = dao.getUdhaarRecordById(takenId)!!
+        assertEquals(0.0, takenRecordSettled.remainingAmount, 0.001)
+        assertEquals("SETTLED", takenRecordSettled.status)
+    }
+
+    @Test
+    fun testUdhaarInsufficientBalanceBlocksTransaction() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val hbl = dao.getAllAccountsDirect().find { it.name == "HBL" }!!
+        val hugeAmount = hbl.currentBalance + 500000.0
+
+        try {
+            repository.addUdhaarRecord(
+                type = "GIVEN",
+                personName = "Borrower",
+                category = "MONEY",
+                amount = hugeAmount,
+                accountName = "HBL"
+            )
+            fail("Must throw IllegalStateException due to insufficient balance")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message?.contains("Insufficient balance in HBL", ignoreCase = true) == true)
+        }
+    }
+
+    @Test
+    fun testUdhaarEditReversesOldAndAppliesNewBalance() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val hblAcc = dao.getAllAccountsDirect().find { it.name == "HBL" }!!
+        dao.updateAccount(hblAcc.copy(currentBalance = 50000.0))
+        val ublAcc = dao.getAllAccountsDirect().find { it.name == "UBL" }!!
+        dao.updateAccount(ublAcc.copy(currentBalance = 50000.0))
+
+        val hblBefore = 50000.0
+        val ublBefore = 50000.0
+
+        // 1. Create Given Rs 5,000 on HBL
+        val recordId = repository.addUdhaarRecord(
+            type = "GIVEN",
+            personName = "Zaid",
+            category = "MONEY",
+            amount = 5000.0,
+            accountName = "HBL"
+        )
+        val hblMid = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblBefore - 5000.0, hblMid, 0.001)
+
+        // 2. Edit to UBL Rs 3,000
+        repository.updateUdhaarRecord(
+            id = recordId,
+            type = "GIVEN",
+            personName = "Zaid",
+            category = "MONEY",
+            amount = 3000.0,
+            accountName = "UBL",
+            date = "2026-11-09",
+            time = "10:00:00"
+        )
+
+        // HBL balance must be restored (+5,000)
+        val hblAfter = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblBefore, hblAfter, 0.001)
+
+        // UBL balance must be debited by 3,000
+        val ublAfter = dao.getAllAccountsDirect().find { it.name == "UBL" }!!.currentBalance
+        assertEquals(ublBefore - 3000.0, ublAfter, 0.001)
+
+        val updatedRecord = dao.getUdhaarRecordById(recordId)!!
+        assertEquals("UBL", updatedRecord.accountName)
+        assertEquals(3000.0, updatedRecord.originalAmount, 0.001)
+    }
+
+    @Test
+    fun testUdhaarDeleteRestoresAccountBalances() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val hblAcc = dao.getAllAccountsDirect().find { it.name == "HBL" }!!
+        dao.updateAccount(hblAcc.copy(currentBalance = 50000.0))
+        val hblBefore = 50000.0
+
+        val recordId = repository.addUdhaarRecord(
+            type = "GIVEN",
+            personName = "Bilal",
+            category = "MONEY",
+            amount = 6000.0,
+            accountName = "HBL"
+        )
+
+        // Repayment of 2,000 received
+        val repId = repository.addUdhaarRepayment(
+            udhaarId = recordId,
+            amount = 2000.0,
+            accountName = "HBL"
+        )
+
+        // Net change so far: -4,000
+        val hblMid = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblBefore - 4000.0, hblMid, 0.001)
+
+        // Delete repayment only
+        repository.deleteUdhaarRepayment(repaymentId = repId, udhaarId = recordId)
+        val hblAfterRepDel = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblBefore - 6000.0, hblAfterRepDel, 0.001)
+
+        // Delete entire record
+        repository.deleteUdhaarRecord(recordId)
+        val hblFinal = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblBefore, hblFinal, 0.001)
+
+        assertNull(dao.getUdhaarRecordById(recordId))
+    }
+
+    @Test
+    fun testUdhaarItemRecordNeverTouchesBalances() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val totalBalBefore = dao.getAllAccountsDirect().sumOf { it.currentBalance }
+
+        val itemId = repository.addUdhaarRecord(
+            type = "GIVEN",
+            personName = "Hamza",
+            category = "ITEM",
+            itemDescription = "MacBook Pro",
+            accountName = ""
+        )
+
+        val totalBalAfter = dao.getAllAccountsDirect().sumOf { it.currentBalance }
+        assertEquals(totalBalBefore, totalBalAfter, 0.001)
+
+        val itemRecord = dao.getUdhaarRecordById(itemId)!!
+        assertEquals("ITEM", itemRecord.category)
+        assertEquals("MacBook Pro", itemRecord.itemDescription)
+        assertEquals("", itemRecord.accountName)
+        assertEquals(0L, itemRecord.transactionId)
+
+        // Mark returned
+        repository.markItemReturned(itemId, true)
+        val returnedRecord = dao.getUdhaarRecordById(itemId)!!
+        assertTrue(returnedRecord.isItemReturned)
+        assertEquals("SETTLED", returnedRecord.status)
+        assertEquals(totalBalBefore, dao.getAllAccountsDirect().sumOf { it.currentBalance }, 0.001)
+    }
+
+    @Test
+    fun testUdhaarUnlinkedMigration() = runBlocking {
+        repository.initializeIfEmpty()
+
+        val hblAcc = dao.getAllAccountsDirect().find { it.name == "HBL" }!!
+        dao.updateAccount(hblAcc.copy(currentBalance = 50000.0))
+        val hblBefore = 50000.0
+
+        // Insert legacy unlinked record with accountName = "" and transactionId = 0
+        val unlinked = com.example.data.model.UdhaarRecordEntity(
+            type = "GIVEN",
+            personName = "Old Record",
+            category = "MONEY",
+            originalAmount = 3500.0,
+            remainingAmount = 3500.0,
+            accountName = "",
+            transactionId = 0L,
+            date = "2026-11-01",
+            time = "12:00:00"
+        )
+        val legacyId = dao.insertUdhaarRecord(unlinked)
+
+        // Balance should NOT have changed yet
+        assertEquals(hblBefore, dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance, 0.001)
+
+        // When user edits and chooses HBL, balance is applied once
+        repository.updateUdhaarRecord(
+            id = legacyId,
+            type = "GIVEN",
+            personName = "Old Record",
+            category = "MONEY",
+            amount = 3500.0,
+            accountName = "HBL",
+            date = "2026-11-01",
+            time = "12:00:00"
+        )
+
+        val hblAfter = dao.getAllAccountsDirect().find { it.name == "HBL" }!!.currentBalance
+        assertEquals(hblBefore - 3500.0, hblAfter, 0.001)
+
+        val updated = dao.getUdhaarRecordById(legacyId)!!
+        assertEquals("HBL", updated.accountName)
+        assertTrue(updated.transactionId > 0)
+    }
 }

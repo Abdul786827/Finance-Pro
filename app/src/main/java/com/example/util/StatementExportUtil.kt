@@ -19,8 +19,9 @@ object StatementExportUtil {
         sb.append("Sr#,Day,Date,Time,Expense,Received,Balance,From,To,Comments,HBL,UBL,Sadapay,Easypaisa,JazzCash,Mashreq,Wallet,Total Balance\n")
 
         for (tx in transactions) {
-            val expense = if (tx.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE")) tx.amount else 0.0
-            val received = if (tx.type == "INCOME") tx.amount else 0.0
+            val isUdhaarIncoming = tx.type == "UDHAAR" && (tx.description.contains("Taken", ignoreCase = true) || tx.description.contains("Repayment Received", ignoreCase = true))
+            val expense = if (tx.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE") || (tx.type == "UDHAAR" && !isUdhaarIncoming)) tx.amount else 0.0
+            val received = if (tx.type == "INCOME" || (tx.type == "UDHAAR" && isUdhaarIncoming)) tx.amount else 0.0
             val cleanComments = tx.comments.replace(",", " ")
             val cleanFrom = tx.fromAccount.replace(",", " ")
             val cleanTo = tx.toAccount.replace(",", " ")
@@ -168,8 +169,10 @@ object StatementExportUtil {
         var totalTransfer = 0.0
 
         for (tx in transactions.take(45)) { // First 45 items fit cleanly on page 1
-            if (tx.type == "INCOME") totalRecv += tx.amount
-            if (tx.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE")) totalExp += tx.amount
+            val isUdhaarIncoming = tx.type == "UDHAAR" && (tx.description.contains("Taken", ignoreCase = true) || tx.description.contains("Repayment Received", ignoreCase = true))
+            val isInc = tx.type == "INCOME" || isUdhaarIncoming
+            if (isInc) totalRecv += tx.amount
+            if (tx.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE") || (tx.type == "UDHAAR" && !isUdhaarIncoming)) totalExp += tx.amount
             if (tx.type == "TRANSFER") totalTransfer += tx.amount
 
             val day = tx.dayOfWeek.ifBlank { DateUtils.getDayOfWeek(tx.date) }
@@ -179,15 +182,15 @@ object StatementExportUtil {
             canvas.drawText("${tx.serialNumber}", 45f, y, cellPaint)
             canvas.drawText("$dateWithDay  $time12", 80f, y, cellPaint)
             canvas.drawText(day.take(3), 240f, y, cellPaint)
-            canvas.drawText(tx.type, 295f, y, cellPaint)
+            canvas.drawText(if (tx.type == "UDHAAR") "Udhaar" else tx.type, 295f, y, cellPaint)
             val fromTo = "${tx.fromAccount.take(10)} -> ${tx.toAccount.take(10)}"
             canvas.drawText(fromTo, 375f, y, cellPaint)
 
             val amtText = DateUtils.formatCurrency(tx.amount)
-            if (tx.type == "INCOME") {
-                canvas.drawText("+$amtText", 540f, y, incomePaint)
-            } else if (tx.type == "TRANSFER") {
+            if (tx.type == "TRANSFER") {
                 canvas.drawText(amtText, 540f, y, transferPaint)
+            } else if (isInc) {
+                canvas.drawText("+$amtText", 540f, y, incomePaint)
             } else {
                 canvas.drawText("-$amtText", 540f, y, expensePaint)
             }
@@ -195,7 +198,7 @@ object StatementExportUtil {
             val displayComments = if (tx.type == "TRANSFER" && tx.comments.isBlank()) {
                 "Transfer: ${tx.fromAccount} -> ${tx.toAccount}"
             } else {
-                tx.comments
+                tx.comments.ifBlank { tx.description }
             }
             canvas.drawText(displayComments.take(24), 640f, y, cellPaint)
             canvas.drawText(DateUtils.formatCurrency(tx.totalAccountBalance), 830f, y, cellPaint)

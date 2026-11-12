@@ -22,7 +22,7 @@ import com.example.data.model.*
         UdhaarRecordEntity::class,
         UdhaarRepaymentEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class FinanceDatabase : RoomDatabase() {
@@ -97,6 +97,15 @@ abstract class FinanceDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE udhaar_records ADD COLUMN accountName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE udhaar_records ADD COLUMN transactionId INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE udhaar_repayments ADD COLUMN accountName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE udhaar_repayments ADD COLUMN transactionId INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         /**
          * Thread-safe singleton builder for the Room SQLite database.
          * Persists all transactions, accounts, and financial records safely across app restarts.
@@ -108,7 +117,7 @@ abstract class FinanceDatabase : RoomDatabase() {
                     FinanceDatabase::class.java,
                     "finance_statement_database.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

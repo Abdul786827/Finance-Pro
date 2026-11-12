@@ -189,6 +189,8 @@ data class UdhaarRecordEntity(
     val note: String = "", // Optional notes
     val status: String = "PENDING", // "PENDING", "PARTIAL", "SETTLED"
     val isItemReturned: Boolean = false, // For ITEM category
+    val accountName: String = "", // Bank/Wallet account name for MONEY (e.g. "HBL", "JazzCash") or "" if unlinked/item
+    val transactionId: Long = 0L, // Linked TransactionEntity ID for balance tracking and statement
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -213,6 +215,8 @@ data class UdhaarRepaymentEntity(
     val time: String, // 12-hour AM/PM or HH:mm:ss
     val dayOfWeek: String = "",
     val note: String = "",
+    val accountName: String = "", // Bank/Wallet account name or "" if unlinked
+    val transactionId: Long = 0L, // Linked TransactionEntity ID for balance tracking and statement
     val createdAt: Long = System.currentTimeMillis()
 )
 

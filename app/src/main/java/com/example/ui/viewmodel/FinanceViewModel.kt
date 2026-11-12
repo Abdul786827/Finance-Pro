@@ -405,27 +405,34 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         phoneNumber: String = "",
         category: String = "MONEY",
         amount: Double = 0.0,
+        accountName: String = "",
         itemDescription: String = "",
         date: String = DateUtils.getCurrentDate(),
         time: String = DateUtils.getCurrentTime(),
         dueDate: String = "",
         note: String = "",
-        onComplete: (Long) -> Unit = {}
+        onError: (String) -> Unit = {},
+        onSuccess: (Long) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val id = repository.addUdhaarRecord(
-                type = type,
-                personName = personName,
-                phoneNumber = phoneNumber,
-                category = category,
-                amount = amount,
-                itemDescription = itemDescription,
-                date = date,
-                time = time,
-                dueDate = dueDate,
-                note = note
-            )
-            onComplete(id)
+            try {
+                val id = repository.addUdhaarRecord(
+                    type = type,
+                    personName = personName,
+                    phoneNumber = phoneNumber,
+                    category = category,
+                    amount = amount,
+                    accountName = accountName,
+                    itemDescription = itemDescription,
+                    date = date,
+                    time = time,
+                    dueDate = dueDate,
+                    note = note
+                )
+                onSuccess(id)
+            } catch (e: Exception) {
+                onError(e.message ?: "Failed to save Udhaar record")
+            }
         }
     }
 
@@ -436,28 +443,35 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         phoneNumber: String = "",
         category: String = "MONEY",
         amount: Double = 0.0,
+        accountName: String = "",
         itemDescription: String = "",
         date: String,
         time: String,
         dueDate: String = "",
         note: String = "",
-        onComplete: () -> Unit = {}
+        onError: (String) -> Unit = {},
+        onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
-            repository.updateUdhaarRecord(
-                id = id,
-                type = type,
-                personName = personName,
-                phoneNumber = phoneNumber,
-                category = category,
-                amount = amount,
-                itemDescription = itemDescription,
-                date = date,
-                time = time,
-                dueDate = dueDate,
-                note = note
-            )
-            onComplete()
+            try {
+                repository.updateUdhaarRecord(
+                    id = id,
+                    type = type,
+                    personName = personName,
+                    phoneNumber = phoneNumber,
+                    category = category,
+                    amount = amount,
+                    accountName = accountName,
+                    itemDescription = itemDescription,
+                    date = date,
+                    time = time,
+                    dueDate = dueDate,
+                    note = note
+                )
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "Failed to update Udhaar record")
+            }
         }
     }
 
@@ -478,20 +492,27 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun addUdhaarRepayment(
         udhaarId: Long,
         amount: Double,
+        accountName: String = "",
         date: String = DateUtils.getCurrentDate(),
         time: String = DateUtils.getCurrentTime(),
         note: String = "",
-        onComplete: () -> Unit = {}
+        onError: (String) -> Unit = {},
+        onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
-            repository.addUdhaarRepayment(
-                udhaarId = udhaarId,
-                amount = amount,
-                date = date,
-                time = time,
-                note = note
-            )
-            onComplete()
+            try {
+                repository.addUdhaarRepayment(
+                    udhaarId = udhaarId,
+                    amount = amount,
+                    accountName = accountName,
+                    date = date,
+                    time = time,
+                    note = note
+                )
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "Failed to save repayment")
+            }
         }
     }
 
@@ -506,21 +527,28 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         repaymentId: Long,
         udhaarId: Long,
         amount: Double,
+        accountName: String = "",
         date: String,
         time: String,
         note: String,
-        onComplete: () -> Unit = {}
+        onError: (String) -> Unit = {},
+        onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
-            repository.updateUdhaarRepayment(
-                repaymentId = repaymentId,
-                udhaarId = udhaarId,
-                newAmount = amount,
-                date = date,
-                time = time,
-                note = note
-            )
-            onComplete()
+            try {
+                repository.updateUdhaarRepayment(
+                    repaymentId = repaymentId,
+                    udhaarId = udhaarId,
+                    newAmount = amount,
+                    newAccountName = accountName,
+                    date = date,
+                    time = time,
+                    note = note
+                )
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "Failed to update repayment")
+            }
         }
     }
 }

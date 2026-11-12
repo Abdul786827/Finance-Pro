@@ -633,8 +633,8 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.insertAccounts(SeedData.defaultAccounts)
     }
 
-    // --- UDHAAR (LEND & BORROW) SEPARATE LEDGER METHODS ---
-    // Rule: Never touches bank/wallet accounts, never modifies income or expenses
+    // --- UDHAAR (LEND & BORROW) CONNECTED LEDGER METHODS ---
+    // Connected to bank/wallet account balances. Never counted as income/expenses in statements or summaries.
 
     fun getRepaymentsForUdhaar(udhaarId: Long): Flow<List<UdhaarRepaymentEntity>> {
         return dao.getRepaymentsForUdhaar(udhaarId)
@@ -646,6 +646,7 @@ class FinanceRepository(private val dao: FinanceDao) {
         phoneNumber: String = "",
         category: String = "MONEY", // "MONEY" or "ITEM"
         amount: Double = 0.0,
+        accountName: String = "", // Required for MONEY
         itemDescription: String = "",
         date: String = DateUtils.getCurrentDate(),
         time: String = DateUtils.getCurrentTime(),
@@ -655,6 +656,74 @@ class FinanceRepository(private val dao: FinanceDao) {
         val cleanName = personName.trim()
         val dayOfWeek = DateUtils.getDayOfWeek(date)
         val initialStatus = if (category == "ITEM") "PENDING" else if (amount <= 0.0) "SETTLED" else "PENDING"
+
+        var txId = 0L
+        var linkedAccount = ""
+
+        if (category == "MONEY") {
+            require(accountName.isNotBlank()) { "Please select an account for money records." }
+            require(amount > 0) { "Please enter a valid amount greater than 0." }
+
+            val accountsList = dao.getAllAccountsDirect()
+            val account = accountsList.find { it.name.equals(accountName, ignoreCase = true) }
+                ?: throw IllegalArgumentException("Account '$accountName' not found")
+
+            // Balance Rule: Given decreases balance; Taken increases balance
+            if (type == "GIVEN") {
+                if (account.currentBalance - amount < -0.0001) {
+                    throw IllegalStateException("Insufficient balance in ${account.name}. Available: Rs. ${DateUtils.formatCurrency(account.currentBalance)}, Required: Rs. ${DateUtils.formatCurrency(amount)}")
+                }
+                val updatedAcc = account.copy(
+                    currentBalance = account.currentBalance - amount,
+                    totalTransferredOut = account.totalTransferredOut + amount
+                )
+                dao.updateAccount(updatedAcc)
+            } else { // "TAKEN"
+                val updatedAcc = account.copy(
+                    currentBalance = account.currentBalance + amount,
+                    totalReceived = account.totalReceived + amount
+                )
+                dao.updateAccount(updatedAcc)
+            }
+
+            linkedAccount = account.name
+
+            // Snapshot balances for transaction row
+            val freshAccounts = dao.getAllAccountsDirect().associateBy { it.name }
+            val hbl = freshAccounts["HBL"]?.currentBalance ?: 0.0
+            val ubl = freshAccounts["UBL"]?.currentBalance ?: 0.0
+            val sadapay = freshAccounts["Sadapay"]?.currentBalance ?: 0.0
+            val easypaisa = freshAccounts["Easypaisa"]?.currentBalance ?: 0.0
+            val jazzCash = freshAccounts["JazzCash"]?.currentBalance ?: 0.0
+            val mashreq = freshAccounts["Mashreq"]?.currentBalance ?: 0.0
+            val wallet = freshAccounts["Wallet"]?.currentBalance ?: 0.0
+            val totalBal = hbl + ubl + sadapay + easypaisa + jazzCash + mashreq + wallet
+
+            val nextSerial = (dao.getMaxSerialNumber() ?: 0) + 1
+            val transaction = TransactionEntity(
+                serialNumber = nextSerial,
+                date = date,
+                time = DateUtils.to24HourTime(time),
+                dayOfWeek = dayOfWeek,
+                type = "UDHAAR",
+                amount = amount,
+                fromAccount = if (type == "GIVEN") account.name else cleanName,
+                toAccount = if (type == "GIVEN") cleanName else account.name,
+                category = "Udhaar",
+                comments = note.trim().ifBlank { if (type == "GIVEN") "Udhaar Given to $cleanName" else "Udhaar Taken from $cleanName" },
+                description = if (type == "GIVEN") "Udhaar Given: $cleanName" else "Udhaar Taken: $cleanName",
+                hblBalance = hbl,
+                ublBalance = ubl,
+                sadapayBalance = sadapay,
+                easypaisaBalance = easypaisa,
+                jazzCashBalance = jazzCash,
+                mashreqBalance = mashreq,
+                walletBalance = wallet,
+                totalAccountBalance = totalBal
+            )
+            txId = dao.insertTransaction(transaction)
+        }
+
         val record = UdhaarRecordEntity(
             type = type,
             personName = cleanName,
@@ -670,6 +739,8 @@ class FinanceRepository(private val dao: FinanceDao) {
             note = note.trim(),
             status = initialStatus,
             isItemReturned = false,
+            accountName = linkedAccount,
+            transactionId = txId,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
@@ -683,6 +754,7 @@ class FinanceRepository(private val dao: FinanceDao) {
         phoneNumber: String = "",
         category: String = "MONEY",
         amount: Double = 0.0,
+        accountName: String = "",
         itemDescription: String = "",
         date: String,
         time: String,
@@ -691,15 +763,170 @@ class FinanceRepository(private val dao: FinanceDao) {
     ) {
         val existing = dao.getUdhaarRecordById(id) ?: return
         val dayOfWeek = DateUtils.getDayOfWeek(date)
+        val cleanName = personName.trim()
+
+        var currentTxId = existing.transactionId
+        var finalAccountName = if (category == "MONEY") accountName.trim() else ""
+
+        // Check and validate balance updates atomically
+        if (category == "MONEY") {
+            require(finalAccountName.isNotBlank()) { "Please select an account for money records." }
+            require(amount > 0) { "Please enter a valid amount greater than 0." }
+
+            // 1. Check if reversing old and applying new is valid
+            val accounts = dao.getAllAccountsDirect().associateBy { it.name }.toMutableMap()
+            var simulatedOldBalance = accounts[existing.accountName]?.currentBalance ?: 0.0
+
+            if (existing.category == "MONEY" && existing.accountName.isNotBlank()) {
+                simulatedOldBalance = if (existing.type == "GIVEN") {
+                    simulatedOldBalance + existing.originalAmount
+                } else {
+                    simulatedOldBalance - existing.originalAmount
+                }
+            }
+
+            if (type == "GIVEN") {
+                val availableInNew = if (finalAccountName.equals(existing.accountName, ignoreCase = true)) {
+                    simulatedOldBalance
+                } else {
+                    accounts[finalAccountName]?.currentBalance ?: 0.0
+                }
+                if (availableInNew - amount < -0.0001) {
+                    throw IllegalStateException("Insufficient balance in $finalAccountName. Available: Rs. ${DateUtils.formatCurrency(availableInNew)}, Required: Rs. ${DateUtils.formatCurrency(amount)}")
+                }
+            }
+
+            // 2. Revert old account if previously linked
+            if (existing.category == "MONEY" && existing.accountName.isNotBlank()) {
+                val oldAcc = dao.getAllAccountsDirect().find { it.name.equals(existing.accountName, ignoreCase = true) }
+                if (oldAcc != null) {
+                    val reverted = if (existing.type == "GIVEN") {
+                        oldAcc.copy(
+                            currentBalance = oldAcc.currentBalance + existing.originalAmount,
+                            totalTransferredOut = (oldAcc.totalTransferredOut - existing.originalAmount).coerceAtLeast(0.0)
+                        )
+                    } else {
+                        oldAcc.copy(
+                            currentBalance = oldAcc.currentBalance - existing.originalAmount,
+                            totalReceived = (oldAcc.totalReceived - existing.originalAmount).coerceAtLeast(0.0)
+                        )
+                    }
+                    dao.updateAccount(reverted)
+                }
+            }
+
+            // 3. Apply new account
+            val newAcc = dao.getAllAccountsDirect().find { it.name.equals(finalAccountName, ignoreCase = true) }
+                ?: throw IllegalArgumentException("Account '$finalAccountName' not found")
+            val updatedNew = if (type == "GIVEN") {
+                newAcc.copy(
+                    currentBalance = newAcc.currentBalance - amount,
+                    totalTransferredOut = newAcc.totalTransferredOut + amount
+                )
+            } else {
+                newAcc.copy(
+                    currentBalance = newAcc.currentBalance + amount,
+                    totalReceived = newAcc.totalReceived + amount
+                )
+            }
+            dao.updateAccount(updatedNew)
+            finalAccountName = newAcc.name
+
+            // 4. Update or insert transaction
+            val freshAccounts = dao.getAllAccountsDirect().associateBy { it.name }
+            val hbl = freshAccounts["HBL"]?.currentBalance ?: 0.0
+            val ubl = freshAccounts["UBL"]?.currentBalance ?: 0.0
+            val sadapay = freshAccounts["Sadapay"]?.currentBalance ?: 0.0
+            val easypaisa = freshAccounts["Easypaisa"]?.currentBalance ?: 0.0
+            val jazzCash = freshAccounts["JazzCash"]?.currentBalance ?: 0.0
+            val mashreq = freshAccounts["Mashreq"]?.currentBalance ?: 0.0
+            val wallet = freshAccounts["Wallet"]?.currentBalance ?: 0.0
+            val totalBal = hbl + ubl + sadapay + easypaisa + jazzCash + mashreq + wallet
+
+            if (currentTxId > 0) {
+                val existingTx = dao.getTransactionById(currentTxId)
+                if (existingTx != null) {
+                    val updatedTx = existingTx.copy(
+                        date = date,
+                        time = DateUtils.to24HourTime(time),
+                        dayOfWeek = dayOfWeek,
+                        type = "UDHAAR",
+                        amount = amount,
+                        fromAccount = if (type == "GIVEN") finalAccountName else cleanName,
+                        toAccount = if (type == "GIVEN") cleanName else finalAccountName,
+                        description = if (type == "GIVEN") "Udhaar Given: $cleanName" else "Udhaar Taken: $cleanName",
+                        comments = note.trim().ifBlank { if (type == "GIVEN") "Udhaar Given to $cleanName" else "Udhaar Taken from $cleanName" },
+                        hblBalance = hbl,
+                        ublBalance = ubl,
+                        sadapayBalance = sadapay,
+                        easypaisaBalance = easypaisa,
+                        jazzCashBalance = jazzCash,
+                        mashreqBalance = mashreq,
+                        walletBalance = wallet,
+                        totalAccountBalance = totalBal,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    dao.updateTransaction(updatedTx)
+                }
+            } else {
+                val nextSerial = (dao.getMaxSerialNumber() ?: 0) + 1
+                val newTx = TransactionEntity(
+                    serialNumber = nextSerial,
+                    date = date,
+                    time = DateUtils.to24HourTime(time),
+                    dayOfWeek = dayOfWeek,
+                    type = "UDHAAR",
+                    amount = amount,
+                    fromAccount = if (type == "GIVEN") finalAccountName else cleanName,
+                    toAccount = if (type == "GIVEN") cleanName else finalAccountName,
+                    category = "Udhaar",
+                    description = if (type == "GIVEN") "Udhaar Given: $cleanName" else "Udhaar Taken: $cleanName",
+                    comments = note.trim().ifBlank { if (type == "GIVEN") "Udhaar Given to $cleanName" else "Udhaar Taken from $cleanName" },
+                    hblBalance = hbl,
+                    ublBalance = ubl,
+                    sadapayBalance = sadapay,
+                    easypaisaBalance = easypaisa,
+                    jazzCashBalance = jazzCash,
+                    mashreqBalance = mashreq,
+                    walletBalance = wallet,
+                    totalAccountBalance = totalBal
+                )
+                currentTxId = dao.insertTransaction(newTx)
+            }
+        } else {
+            // Category switched to ITEM: revert old money transaction if present
+            if (existing.category == "MONEY" && existing.accountName.isNotBlank()) {
+                val oldAcc = dao.getAllAccountsDirect().find { it.name.equals(existing.accountName, ignoreCase = true) }
+                if (oldAcc != null) {
+                    val reverted = if (existing.type == "GIVEN") {
+                        oldAcc.copy(
+                            currentBalance = oldAcc.currentBalance + existing.originalAmount,
+                            totalTransferredOut = (oldAcc.totalTransferredOut - existing.originalAmount).coerceAtLeast(0.0)
+                        )
+                    } else {
+                        oldAcc.copy(
+                            currentBalance = oldAcc.currentBalance - existing.originalAmount,
+                            totalReceived = (oldAcc.totalReceived - existing.originalAmount).coerceAtLeast(0.0)
+                        )
+                    }
+                    dao.updateAccount(reverted)
+                }
+            }
+            if (currentTxId > 0) {
+                dao.deleteTransactionById(currentTxId)
+                currentTxId = 0L
+            }
+            finalAccountName = ""
+        }
+
+        // 5. Recalculate remaining amount and status
         val repayments = dao.getRepaymentsForUdhaarDirect(id)
         val totalRepaid = repayments.sumOf { it.amount }
-
         val newRemaining = if (category == "MONEY") {
             (amount - totalRepaid).coerceAtLeast(0.0)
         } else {
             0.0
         }
-
         val newStatus = if (category == "ITEM") {
             if (existing.isItemReturned) "SETTLED" else "PENDING"
         } else {
@@ -712,7 +939,7 @@ class FinanceRepository(private val dao: FinanceDao) {
 
         val updated = existing.copy(
             type = type,
-            personName = personName.trim(),
+            personName = cleanName,
             phoneNumber = phoneNumber.trim(),
             category = category,
             originalAmount = if (category == "MONEY") amount else 0.0,
@@ -724,12 +951,69 @@ class FinanceRepository(private val dao: FinanceDao) {
             dueDate = dueDate.trim(),
             note = note.trim(),
             status = newStatus,
+            accountName = finalAccountName,
+            transactionId = currentTxId,
             updatedAt = System.currentTimeMillis()
         )
         dao.updateUdhaarRecord(updated)
     }
 
     suspend fun deleteUdhaarRecord(id: Long) {
+        val record = dao.getUdhaarRecordById(id) ?: return
+
+        // 1. Delete all repayments and reverse their account balances
+        val repayments = dao.getRepaymentsForUdhaarDirect(id)
+        for (rep in repayments) {
+            if (rep.accountName.isNotBlank()) {
+                val acc = dao.getAllAccountsDirect().find { it.name.equals(rep.accountName, ignoreCase = true) }
+                if (acc != null) {
+                    val reverted = if (record.type == "GIVEN") {
+                        // Repayment was money received -> reverse by subtracting
+                        acc.copy(
+                            currentBalance = acc.currentBalance - rep.amount,
+                            totalReceived = (acc.totalReceived - rep.amount).coerceAtLeast(0.0)
+                        )
+                    } else {
+                        // Repayment was money paid -> reverse by adding back
+                        acc.copy(
+                            currentBalance = acc.currentBalance + rep.amount,
+                            totalTransferredOut = (acc.totalTransferredOut - rep.amount).coerceAtLeast(0.0)
+                        )
+                    }
+                    dao.updateAccount(reverted)
+                }
+            }
+            if (rep.transactionId > 0) {
+                dao.deleteTransactionById(rep.transactionId)
+            }
+            dao.deleteUdhaarRepaymentById(rep.id)
+        }
+
+        // 2. Reverse record's own balance effect
+        if (record.category == "MONEY" && record.accountName.isNotBlank()) {
+            val acc = dao.getAllAccountsDirect().find { it.name.equals(record.accountName, ignoreCase = true) }
+            if (acc != null) {
+                val reverted = if (record.type == "GIVEN") {
+                    // Record was money lent -> restore balance
+                    acc.copy(
+                        currentBalance = acc.currentBalance + record.originalAmount,
+                        totalTransferredOut = (acc.totalTransferredOut - record.originalAmount).coerceAtLeast(0.0)
+                    )
+                } else {
+                    // Record was money borrowed -> subtract balance
+                    acc.copy(
+                        currentBalance = acc.currentBalance - record.originalAmount,
+                        totalReceived = (acc.totalReceived - record.originalAmount).coerceAtLeast(0.0)
+                    )
+                }
+                dao.updateAccount(reverted)
+            }
+        }
+        if (record.transactionId > 0) {
+            dao.deleteTransactionById(record.transactionId)
+        }
+
+        // 3. Delete the record
         dao.deleteUdhaarRecordById(id)
     }
 
@@ -746,12 +1030,76 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun addUdhaarRepayment(
         udhaarId: Long,
         amount: Double,
+        accountName: String = "",
         date: String = DateUtils.getCurrentDate(),
         time: String = DateUtils.getCurrentTime(),
         note: String = ""
     ): Long {
-        val record = dao.getUdhaarRecordById(udhaarId) ?: return 0L
+        val record = dao.getUdhaarRecordById(udhaarId) ?: throw IllegalArgumentException("Udhaar record not found")
+        require(amount > 0) { "Please enter a valid repayment amount greater than 0." }
+
+        val targetAccountName = accountName.trim().ifBlank { record.accountName }
+        require(targetAccountName.isNotBlank()) { "Please select an account for repayment." }
+
+        val account = dao.getAllAccountsDirect().find { it.name.equals(targetAccountName, ignoreCase = true) }
+            ?: throw IllegalArgumentException("Account '$targetAccountName' not found")
+
+        // Balance Rules for Repayments:
+        // On GIVEN record: money is received back -> account balance INCREASES
+        // On TAKEN record: money is paid back -> account balance DECREASES
+        if (record.type == "GIVEN") {
+            val updated = account.copy(
+                currentBalance = account.currentBalance + amount,
+                totalReceived = account.totalReceived + amount
+            )
+            dao.updateAccount(updated)
+        } else { // "TAKEN"
+            if (account.currentBalance - amount < -0.0001) {
+                throw IllegalStateException("Insufficient balance in ${account.name}. Available: Rs. ${DateUtils.formatCurrency(account.currentBalance)}, Required: Rs. ${DateUtils.formatCurrency(amount)}")
+            }
+            val updated = account.copy(
+                currentBalance = account.currentBalance - amount,
+                totalTransferredOut = account.totalTransferredOut + amount
+            )
+            dao.updateAccount(updated)
+        }
+
+        // Snapshot balances
+        val freshAccounts = dao.getAllAccountsDirect().associateBy { it.name }
+        val hbl = freshAccounts["HBL"]?.currentBalance ?: 0.0
+        val ubl = freshAccounts["UBL"]?.currentBalance ?: 0.0
+        val sadapay = freshAccounts["Sadapay"]?.currentBalance ?: 0.0
+        val easypaisa = freshAccounts["Easypaisa"]?.currentBalance ?: 0.0
+        val jazzCash = freshAccounts["JazzCash"]?.currentBalance ?: 0.0
+        val mashreq = freshAccounts["Mashreq"]?.currentBalance ?: 0.0
+        val wallet = freshAccounts["Wallet"]?.currentBalance ?: 0.0
+        val totalBal = hbl + ubl + sadapay + easypaisa + jazzCash + mashreq + wallet
+
         val dayOfWeek = DateUtils.getDayOfWeek(date)
+        val nextSerial = (dao.getMaxSerialNumber() ?: 0) + 1
+        val transaction = TransactionEntity(
+            serialNumber = nextSerial,
+            date = date,
+            time = DateUtils.to24HourTime(time),
+            dayOfWeek = dayOfWeek,
+            type = "UDHAAR",
+            amount = amount,
+            fromAccount = if (record.type == "GIVEN") record.personName else account.name,
+            toAccount = if (record.type == "GIVEN") account.name else record.personName,
+            category = "Udhaar",
+            description = if (record.type == "GIVEN") "Repayment Received: ${record.personName}" else "Repayment Paid: ${record.personName}",
+            comments = note.trim().ifBlank { if (record.type == "GIVEN") "Repayment from ${record.personName}" else "Repayment to ${record.personName}" },
+            hblBalance = hbl,
+            ublBalance = ubl,
+            sadapayBalance = sadapay,
+            easypaisaBalance = easypaisa,
+            jazzCashBalance = jazzCash,
+            mashreqBalance = mashreq,
+            walletBalance = wallet,
+            totalAccountBalance = totalBal
+        )
+        val txId = dao.insertTransaction(transaction)
+
         val repayment = UdhaarRepaymentEntity(
             udhaarId = udhaarId,
             amount = amount,
@@ -759,11 +1107,13 @@ class FinanceRepository(private val dao: FinanceDao) {
             time = DateUtils.format12HourTime(time),
             dayOfWeek = dayOfWeek,
             note = note.trim(),
+            accountName = account.name,
+            transactionId = txId,
             createdAt = System.currentTimeMillis()
         )
         val repId = dao.insertUdhaarRepayment(repayment)
 
-        // Recalculate remaining balance
+        // Recalculate remaining balance and update record status
         val allRepayments = dao.getRepaymentsForUdhaarDirect(udhaarId)
         val totalRepaid = allRepayments.sumOf { it.amount }
         val remaining = (record.originalAmount - totalRepaid).coerceAtLeast(0.0)
@@ -784,8 +1134,34 @@ class FinanceRepository(private val dao: FinanceDao) {
     }
 
     suspend fun deleteUdhaarRepayment(repaymentId: Long, udhaarId: Long) {
-        dao.deleteUdhaarRepaymentById(repaymentId)
+        val rep = dao.getUdhaarRepaymentById(repaymentId) ?: return
         val record = dao.getUdhaarRecordById(udhaarId) ?: return
+
+        // Reverse repayment effect on account
+        if (rep.accountName.isNotBlank()) {
+            val acc = dao.getAllAccountsDirect().find { it.name.equals(rep.accountName, ignoreCase = true) }
+            if (acc != null) {
+                val reverted = if (record.type == "GIVEN") {
+                    acc.copy(
+                        currentBalance = acc.currentBalance - rep.amount,
+                        totalReceived = (acc.totalReceived - rep.amount).coerceAtLeast(0.0)
+                    )
+                } else {
+                    acc.copy(
+                        currentBalance = acc.currentBalance + rep.amount,
+                        totalTransferredOut = (acc.totalTransferredOut - rep.amount).coerceAtLeast(0.0)
+                    )
+                }
+                dao.updateAccount(reverted)
+            }
+        }
+        if (rep.transactionId > 0) {
+            dao.deleteTransactionById(rep.transactionId)
+        }
+
+        dao.deleteUdhaarRepaymentById(repaymentId)
+
+        // Recalculate remaining on parent record
         val remainingRepayments = dao.getRepaymentsForUdhaarDirect(udhaarId)
         val totalRepaid = remainingRepayments.sumOf { it.amount }
         val remaining = (record.originalAmount - totalRepaid).coerceAtLeast(0.0)
@@ -807,23 +1183,153 @@ class FinanceRepository(private val dao: FinanceDao) {
         repaymentId: Long,
         udhaarId: Long,
         newAmount: Double,
+        newAccountName: String,
         date: String,
         time: String,
         note: String
     ) {
+        val rep = dao.getUdhaarRepaymentById(repaymentId) ?: return
+        val record = dao.getUdhaarRecordById(udhaarId) ?: return
+
+        val targetAccountName = newAccountName.trim().ifBlank { rep.accountName }.ifBlank { record.accountName }
+        require(targetAccountName.isNotBlank()) { "Please select an account for repayment." }
+        require(newAmount > 0) { "Please enter a valid repayment amount greater than 0." }
+
+        // Validate sufficient balance if TAKEN (money going out)
+        val accounts = dao.getAllAccountsDirect().associateBy { it.name }.toMutableMap()
+        var simulatedOldBalance = accounts[rep.accountName]?.currentBalance ?: 0.0
+        if (rep.accountName.isNotBlank()) {
+            simulatedOldBalance = if (record.type == "GIVEN") {
+                simulatedOldBalance - rep.amount
+            } else {
+                simulatedOldBalance + rep.amount
+            }
+        }
+
+        if (record.type == "TAKEN") {
+            val availableInNew = if (targetAccountName.equals(rep.accountName, ignoreCase = true)) {
+                simulatedOldBalance
+            } else {
+                accounts[targetAccountName]?.currentBalance ?: 0.0
+            }
+            if (availableInNew - newAmount < -0.0001) {
+                throw IllegalStateException("Insufficient balance in $targetAccountName. Available: Rs. ${DateUtils.formatCurrency(availableInNew)}, Required: Rs. ${DateUtils.formatCurrency(newAmount)}")
+            }
+        }
+
+        // 1. Revert old repayment on old account
+        if (rep.accountName.isNotBlank()) {
+            val oldAcc = dao.getAllAccountsDirect().find { it.name.equals(rep.accountName, ignoreCase = true) }
+            if (oldAcc != null) {
+                val reverted = if (record.type == "GIVEN") {
+                    oldAcc.copy(
+                        currentBalance = oldAcc.currentBalance - rep.amount,
+                        totalReceived = (oldAcc.totalReceived - rep.amount).coerceAtLeast(0.0)
+                    )
+                } else {
+                    oldAcc.copy(
+                        currentBalance = oldAcc.currentBalance + rep.amount,
+                        totalTransferredOut = (oldAcc.totalTransferredOut - rep.amount).coerceAtLeast(0.0)
+                    )
+                }
+                dao.updateAccount(reverted)
+            }
+        }
+
+        // 2. Apply new repayment on new account
+        val newAcc = dao.getAllAccountsDirect().find { it.name.equals(targetAccountName, ignoreCase = true) }
+            ?: throw IllegalArgumentException("Account '$targetAccountName' not found")
+        val applied = if (record.type == "GIVEN") {
+            newAcc.copy(
+                currentBalance = newAcc.currentBalance + newAmount,
+                totalReceived = newAcc.totalReceived + newAmount
+            )
+        } else {
+            newAcc.copy(
+                currentBalance = newAcc.currentBalance - newAmount,
+                totalTransferredOut = newAcc.totalTransferredOut + newAmount
+            )
+        }
+        dao.updateAccount(applied)
+
+        // 3. Update or insert transaction
+        val freshAccounts = dao.getAllAccountsDirect().associateBy { it.name }
+        val hbl = freshAccounts["HBL"]?.currentBalance ?: 0.0
+        val ubl = freshAccounts["UBL"]?.currentBalance ?: 0.0
+        val sadapay = freshAccounts["Sadapay"]?.currentBalance ?: 0.0
+        val easypaisa = freshAccounts["Easypaisa"]?.currentBalance ?: 0.0
+        val jazzCash = freshAccounts["JazzCash"]?.currentBalance ?: 0.0
+        val mashreq = freshAccounts["Mashreq"]?.currentBalance ?: 0.0
+        val wallet = freshAccounts["Wallet"]?.currentBalance ?: 0.0
+        val totalBal = hbl + ubl + sadapay + easypaisa + jazzCash + mashreq + wallet
+
         val dayOfWeek = DateUtils.getDayOfWeek(date)
-        val repayment = UdhaarRepaymentEntity(
-            id = repaymentId,
-            udhaarId = udhaarId,
+        var currentTxId = rep.transactionId
+
+        if (currentTxId > 0) {
+            val existingTx = dao.getTransactionById(currentTxId)
+            if (existingTx != null) {
+                val updatedTx = existingTx.copy(
+                    date = date,
+                    time = DateUtils.to24HourTime(time),
+                    dayOfWeek = dayOfWeek,
+                    type = "UDHAAR",
+                    amount = newAmount,
+                    fromAccount = if (record.type == "GIVEN") record.personName else newAcc.name,
+                    toAccount = if (record.type == "GIVEN") newAcc.name else record.personName,
+                    description = if (record.type == "GIVEN") "Repayment Received: ${record.personName}" else "Repayment Paid: ${record.personName}",
+                    comments = note.trim().ifBlank { if (record.type == "GIVEN") "Repayment from ${record.personName}" else "Repayment to ${record.personName}" },
+                    hblBalance = hbl,
+                    ublBalance = ubl,
+                    sadapayBalance = sadapay,
+                    easypaisaBalance = easypaisa,
+                    jazzCashBalance = jazzCash,
+                    mashreqBalance = mashreq,
+                    walletBalance = wallet,
+                    totalAccountBalance = totalBal,
+                    updatedAt = System.currentTimeMillis()
+                )
+                dao.updateTransaction(updatedTx)
+            }
+        } else {
+            val nextSerial = (dao.getMaxSerialNumber() ?: 0) + 1
+            val newTx = TransactionEntity(
+                serialNumber = nextSerial,
+                date = date,
+                time = DateUtils.to24HourTime(time),
+                dayOfWeek = dayOfWeek,
+                type = "UDHAAR",
+                amount = newAmount,
+                fromAccount = if (record.type == "GIVEN") record.personName else newAcc.name,
+                toAccount = if (record.type == "GIVEN") newAcc.name else record.personName,
+                category = "Udhaar",
+                description = if (record.type == "GIVEN") "Repayment Received: ${record.personName}" else "Repayment Paid: ${record.personName}",
+                comments = note.trim().ifBlank { if (record.type == "GIVEN") "Repayment from ${record.personName}" else "Repayment to ${record.personName}" },
+                hblBalance = hbl,
+                ublBalance = ubl,
+                sadapayBalance = sadapay,
+                easypaisaBalance = easypaisa,
+                jazzCashBalance = jazzCash,
+                mashreqBalance = mashreq,
+                walletBalance = wallet,
+                totalAccountBalance = totalBal
+            )
+            currentTxId = dao.insertTransaction(newTx)
+        }
+
+        // 4. Update repayment entity
+        val updatedRepayment = rep.copy(
             amount = newAmount,
+            accountName = newAcc.name,
+            transactionId = currentTxId,
             date = date,
             time = DateUtils.format12HourTime(time),
             dayOfWeek = dayOfWeek,
             note = note.trim()
         )
-        dao.updateUdhaarRepayment(repayment)
+        dao.updateUdhaarRepayment(updatedRepayment)
 
-        val record = dao.getUdhaarRecordById(udhaarId) ?: return
+        // 5. Recalculate parent record status
         val allRepayments = dao.getRepaymentsForUdhaarDirect(udhaarId)
         val totalRepaid = allRepayments.sumOf { it.amount }
         val remaining = (record.originalAmount - totalRepaid).coerceAtLeast(0.0)

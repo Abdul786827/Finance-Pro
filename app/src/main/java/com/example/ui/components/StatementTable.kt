@@ -91,14 +91,16 @@ fun DailyStatementTableView(
                         .heightIn(max = 600.dp)
                 ) {
                     items(transactions, key = { it.id }) { tx ->
-                        val expense = if (tx.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE")) tx.amount else 0.0
-                        val received = if (tx.type == "INCOME") tx.amount else 0.0
+                        val isUdhaarIncoming = tx.type == "UDHAAR" && (tx.description.contains("Taken", ignoreCase = true) || tx.description.contains("Repayment Received", ignoreCase = true))
+                        val expense = if (tx.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE") || (tx.type == "UDHAAR" && !isUdhaarIncoming)) tx.amount else 0.0
+                        val received = if (tx.type == "INCOME" || (tx.type == "UDHAAR" && isUdhaarIncoming)) tx.amount else 0.0
 
                         val rowBg = when (tx.type) {
                             "INCOME" -> FinanceIncomeBg.copy(alpha = 0.5f)
                             "PETROL" -> FinancePetrolBg.copy(alpha = 0.5f)
                             "EXTRA_EXPENSE" -> FinanceExtraBg.copy(alpha = 0.5f)
                             "TRANSFER" -> FinanceTransferBg.copy(alpha = 0.4f)
+                            "UDHAAR" -> Color(0xFF7C3AED).copy(alpha = 0.08f)
                             else -> Color.Transparent
                         }
 

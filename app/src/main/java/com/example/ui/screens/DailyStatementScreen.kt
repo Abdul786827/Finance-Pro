@@ -143,7 +143,8 @@ fun DailyStatementScreen(
                 "EXPENSE" to "Expenses",
                 "TRANSFER" to "Transfers",
                 "PETROL" to "Petrol",
-                "EXTRA_EXPENSE" to "Extra Expenses"
+                "EXTRA_EXPENSE" to "Extra Expenses",
+                "UDHAAR" to "Udhaar"
             )
             items(typeList) { (typeKey, typeLabel) ->
                 FilterChip(
@@ -158,6 +159,7 @@ fun DailyStatementScreen(
         val totalIn = filteredTransactions.filter { it.type == "INCOME" }.sumOf { it.amount }
         val totalOut = filteredTransactions.filter { it.type in listOf("EXPENSE", "PETROL", "EXTRA_EXPENSE") }.sumOf { it.amount }
         val totalTransfers = filteredTransactions.filter { it.type == "TRANSFER" }.sumOf { it.amount }
+        val totalUdhaar = filteredTransactions.filter { it.type == "UDHAAR" }.sumOf { it.amount }
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -219,6 +221,14 @@ fun DailyStatementScreen(
                             text = "Transfer: ${DateUtils.formatCurrency(totalTransfers)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = FinanceTransferBlue,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    if (totalUdhaar > 0) {
+                        Text(
+                            text = "Udhaar: ${DateUtils.formatCurrency(totalUdhaar)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF7C3AED),
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -302,13 +312,16 @@ private fun StatementRecordCard(
     onDelete: () -> Unit
 ) {
     val isTransfer = tx.type == "TRANSFER"
-    val isIncome = tx.type == "INCOME"
+    val isUdhaar = tx.type == "UDHAAR"
+    val isUdhaarIncoming = isUdhaar && (tx.description.contains("Taken", ignoreCase = true) || tx.description.contains("Repayment Received", ignoreCase = true))
+    val isIncome = tx.type == "INCOME" || isUdhaarIncoming
 
     val icon = when (tx.type) {
         "TRANSFER" -> Icons.Default.SwapHoriz
         "INCOME" -> Icons.Default.ArrowDownward
         "PETROL" -> Icons.Default.LocalGasStation
         "EXTRA_EXPENSE" -> Icons.Default.ReceiptLong
+        "UDHAAR" -> Icons.Default.Handshake
         else -> Icons.Default.ArrowUpward
     }
 
@@ -317,6 +330,7 @@ private fun StatementRecordCard(
         "INCOME" -> FinanceIncomeGreen
         "PETROL" -> FinancePetrolOrange
         "EXTRA_EXPENSE" -> FinanceExtraPurple
+        "UDHAAR" -> Color(0xFF7C3AED)
         else -> FinanceExpenseRed
     }
 
@@ -327,6 +341,7 @@ private fun StatementRecordCard(
         "INCOME" -> FinanceIncomeBg.copy(alpha = 0.25f)
         "PETROL" -> FinancePetrolBg.copy(alpha = 0.25f)
         "EXTRA_EXPENSE" -> FinanceExtraBg.copy(alpha = 0.25f)
+        "UDHAAR" -> Color(0xFF7C3AED).copy(alpha = 0.08f)
         else -> MaterialTheme.colorScheme.surface
     }
 
@@ -394,12 +409,12 @@ private fun StatementRecordCard(
 
             // Amount, Balance and Action Buttons
             Column(horizontalAlignment = Alignment.End) {
-                val amtColor = when (tx.type) {
-                    "TRANSFER" -> FinanceTransferBlue
-                    "INCOME" -> FinanceIncomeGreen
+                val amtColor = when {
+                    isTransfer -> FinanceTransferBlue
+                    isIncome -> FinanceIncomeGreen
                     else -> FinanceExpenseRed
                 }
-                val prefix = if (isIncome) "+" else if (isTransfer) "" else "-"
+                val prefix = if (isTransfer) "" else if (isIncome) "+" else "-"
 
                 Text(
                     text = "$prefix${DateUtils.formatCurrency(tx.amount)}",
